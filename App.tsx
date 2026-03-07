@@ -35,8 +35,9 @@ const dataUrlToFile = async (dataUrl: string, fileName: string): Promise<File> =
 
 const GPS_ACCURACY_THRESHOLD_M = 20;
 const DESKTOP_GPS_ACCURACY_THRESHOLD_M = 60;
-const DEFAULT_APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbyOLIVrNrxyFIJHklKTUFEX-ckqPaORCo9ga6n7d_FGct5v01o5ZqD44bWj138zcTq49Q/exec';
+const DEFAULT_APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwwxuFkJCGh0FLY3-RpCbrCzltrXH5eVUIuK0qScj5f9DnkgdZwRFfC0mz1xBQMhBTmfQ/exec';
 const LEGACY_APPS_SCRIPT_URLS = [
+  'https://script.google.com/macros/s/AKfycbyOLIVrNrxyFIJHklKTUFEX-ckqPaORCo9ga6n7d_FGct5v01o5ZqD44bWj138zcTq49Q/exec',
   'https://script.google.com/macros/s/AKfycbzLvcetpQNfIl0NF_L5sfUxUq7vgcVDfCcfHfqif7SJZtSwYZ3jfwjbBX89EcjV5rg8kw/exec',
   'https://script.google.com/macros/s/AKfycbxcxJ2nTJpVqECVPkDhNo5ulpsL0G2KSdiwoOqpJeIBASVq_K3mFGpviIXDhPzcdre3sw/exec',
   'https://script.google.com/macros/s/AKfycbwv1eXbUMODTxqoUrxuN2ezFb0E6E34hdJvmLHclmIC5v76yrnT5PvUuthYQahcaskwjA/exec',
@@ -535,7 +536,9 @@ const App: React.FC = () => {
 
     const kesehatanFinal = aiHealth?.health || formState.kesehatan;
     const aiConfidence = aiHealth ? Number(aiHealth.confidence) : undefined;
-    const hcvInput = toHcvInputFromAI(aiHealth);
+    // Fallback: jika AI tidak menganalisis (aiHealth null), hitung HCV dari kesehatan manual
+    const hcvInput = toHcvInputFromAI(aiHealth)
+      ?? (mapHealthToHcvWeight(kesehatanFinal as 'Sehat' | 'Merana' | 'Mati') * 50);
 
     const newEntryMeta: Omit<PlantEntry, 'foto'> = {
       id,

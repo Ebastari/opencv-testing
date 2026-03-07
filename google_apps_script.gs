@@ -298,8 +298,18 @@ function appendMonitoringRow_(sheet, payload) {
   const aiKesehatanRaw = String(payload.AI_Kesehatan || payload.aiKesehatan || '').trim();
   const aiKesehatan = aiKesehatanRaw ? normalizeHealth_(aiKesehatanRaw) : '';
   const aiConfidence = toNumberOrBlank_(payload.AI_Confidence ?? payload.aiConfidence);
-  const aiDeskripsi = String(payload.AI_Deskripsi || payload.aiDeskripsi || '').trim();
-  const hcvInput = toNumberOrBlank_(payload.HCV_Input ?? payload.hcvInput);
+  const aiDeskripsiRaw = String(payload.AI_Deskripsi || payload.aiDeskripsi || '').trim();
+  const hcvInputRaw = toNumberOrBlank_(payload.HCV_Input ?? payload.hcvInput);
+
+  // Server-side fallback: hitung HCV jika klien tidak mengirim
+  const hcvInput = (hcvInputRaw !== '' && hcvInputRaw !== null && hcvInputRaw !== undefined)
+    ? hcvInputRaw
+    : computeHcvInput_(kesehatan, aiKesehatan, aiConfidence);
+
+  // Server-side fallback: generate deskripsi jika klien tidak mengirim
+  const aiDeskripsi = aiDeskripsiRaw
+    ? aiDeskripsiRaw
+    : generateHealthDescription_(kesehatan, aiKesehatan, aiConfidence, hcvInput);
 
   const coords = resolveCoordinates_(payload);
   const lokasiRaw = String(payload.Lokasi || payload.lokasi || coords.text).trim();
@@ -1956,6 +1966,80 @@ function extractDriveFileId_(url) {
     return match2[1];
   }
   return '';
+}
+
+/**
+ * Menghitung bobot HCV berdasarkan status kesehatan.
+ * Sehat = 1, Merana = 0.5, Mati = 0.
+ */
+function mapHealthToHcvWeight_(health) {
+  const h = normalizeHealth_(health);
+  if (h === 'Sehat') return 1;
+  if (h === 'Merana') return 0.5;
+  return 0;
+}
+
+/**
+ * Menghitung HCV_Input server-side.
+ * HCV = bobot_kesehatan × confidence.
+ * Jika confidence tidak tersedia, gunakan default 50%.
+ */
+function computeHcvInput_(kesehatan, aiKesehatan, aiConfidence) {
+  const health = aiKesehatan || kesehatan || 'Sehat';
+  var conf = Number(aiConfidence);
+  if (!isFinite(conf) || conf <= 0) {
+    conf = 50; // default confidence untuk input manual
+  }
+  conf = Math.max(0, Math.min(100, conf));
+  var hcv = mapHealthToHcvWeight_(health) * conf;
+  return Math.round(hcv * 100) / 100;
+}
+
+/**
+ * Menghasilkan AI_Deskripsi server-side berdasarkan data kesehatan.
+ * Dipakai sebagai fallback ketika klien tidak mengirim deskripsi.
+ */
+function generateHealthDescription_(kesehatan, aiKesehatan, aiConfidence, hcvInput) {
+  var health = normalizeHealth_(aiKesehatan || kesehatan || 'Sehat');
+  var conf = Number(aiConfidence);
+  if (!isFinite(conf) || conf <= 0) conf = 50;
+  conf = Math.max(0, Math.min(100, conf));
+
+  var hcv = Number(hcvInput);
+  if (!isFinite(hcv) || hcv < 0) {
+    hcv = mapHealthToHcvWeight_(health) * conf;
+    hcv = Math.round(hcv * 100) / 100;
+  }
+
+  // Interpretasi kesehatan
+  var healthLabel, healthDesc;
+  if (health === 'Sehat') {
+    healthLabel = 'SEHAT';
+    healthDesc = 'kanopi menunjukkan reflektansi hijau kuat, konsisten dengan vegetasi vigor tinggi';
+  } else if (health === 'Merana') {
+    healthLabel = 'MERANA (STRESS)';
+    healthDesc = 'penurunan reflektansi hijau terdeteksi, potensi defisiensi nutrisi atau tekanan air';
+  } else {
+    healthLabel = 'MATI/KRITIS';
+    healthDesc = 'reflektansi hijau minimal, jaringan didominasi pigmen non-fotosintetik';
+  }
+
+  // Interpretasi confidence
+  var confDesc;
+  if (conf >= 80) {
+    confDesc = 'Tingkat keyakinan ' + conf + '% (tinggi) \u2014 distribusi piksel vegetasi konsisten dan terkonsentrasi pada satu kelas spektral';
+  } else if (conf >= 50) {
+    confDesc = 'Tingkat keyakinan ' + conf + '% (sedang) \u2014 sebagian piksel menunjukkan variasi spektral antar kelas kesehatan';
+  } else {
+    confDesc = 'Tingkat keyakinan ' + conf + '% (rendah) \u2014 distribusi spektral tersebar, kemungkinan noise atau campuran objek non-vegetasi';
+  }
+
+  return [
+    'Analisis Kesehatan Vegetasi:',
+    'Klasifikasi: ' + healthLabel + ' \u2014 ' + healthDesc + '.',
+    confDesc + '.',
+    'HCV Score: ' + hcv + '% \u2014 indeks komposit konservasi kesehatan vegetasi.',
+  ].join(' ');
 }
 
 function normalizeHealth_(value) {
