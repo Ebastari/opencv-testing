@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { CameraView } from './components/CameraView';
 import { BottomSheet } from './components/BottomSheet';
 import { useLocalStorage } from './hooks/useLocalStorage';
@@ -34,6 +34,60 @@ const dataUrlToFile = async (dataUrl: string, fileName: string): Promise<File> =
 
 const GPS_ACCURACY_THRESHOLD_M = 20;
 const DESKTOP_GPS_ACCURACY_THRESHOLD_M = 60;
+
+interface GridAnchor {
+  lat: number;
+  lon: number;
+  setAt: string;
+}
+
+const toRad = (value: number): number => (value * Math.PI) / 180;
+
+const calculateDistanceMeters = (
+  fromLat: number,
+  fromLon: number,
+  toLat: number,
+  toLon: number,
+): number => {
+  const earthRadius = 6371000;
+  const dLat = toRad(toLat - fromLat);
+  const dLon = toRad(toLon - fromLon);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(fromLat)) * Math.cos(toRad(toLat)) * Math.sin(dLon / 2) ** 2;
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return earthRadius * c;
+};
+
+const snapCoordinateToGrid = (
+  currentLat: number,
+  currentLon: number,
+  anchor: GridAnchor,
+  spacingX: number,
+  spacingY: number,
+) => {
+  const latScale = 111320;
+  const lonScale = 111320 * Math.cos(toRad(anchor.lat));
+  const safeLonScale = Math.max(1, Math.abs(lonScale));
+  const safeSpacingX = Math.max(1, spacingX);
+  const safeSpacingY = Math.max(1, spacingY);
+
+  const deltaNorthM = (currentLat - anchor.lat) * latScale;
+  const deltaEastM = (currentLon - anchor.lon) * safeLonScale;
+
+  const stepY = Math.round(deltaNorthM / safeSpacingY);
+  const stepX = Math.round(deltaEastM / safeSpacingX);
+
+  const snappedNorthM = stepY * safeSpacingY;
+  const snappedEastM = stepX * safeSpacingX;
+
+  return {
+    lat: anchor.lat + snappedNorthM / latScale,
+    lon: anchor.lon + snappedEastM / safeLonScale,
+    stepX,
+    stepY,
+  };
+};
 
 const isDesktopLikeDevice = (): boolean => {
   const ua = navigator.userAgent || '';
@@ -74,12 +128,15 @@ const App: React.FC = () => {
     vendor: '',
     tim: '',
     kesehatan: 'Sehat',
+    spacingX: 4,
+    spacingY: 4,
   });
+  const [gridAnchor, setGridAnchor] = useLocalStorage<GridAnchor | null>('gridAnchor', null);
 
   const [gps, setGps] = useState<GpsLocation | null>(null);
   const [appsScriptUrl, setAppsScriptUrl] = useLocalStorage<string>(
     'appsScriptUrl', 
-    'https://script.google.com/macros/s/AKfycbz_lxW9C6HYzFLlrJmY9PuQNDKx1UUwjdKsdpVs8rtWgJxFcAmFg-MIYRT5zlkjH5aoDQ/exec'
+    'https://script.google.com/macros/s/AKfycbzdPnQwKdNFZqfrFUm6lWGsbCosai8idMR50Ih5lv-9uX_N24v4lsFGBvy10_MaZHJz/exec'
   );
 
   useEffect(() => {
@@ -280,6 +337,38 @@ const App: React.FC = () => {
     void syncPendingEntries({ background: true });
   }, [isOnline, syncPendingEntries]);
 
+  const liveCoordinate = useMemo(() => {
+    if (!gps) {
+      return null;
+    }
+    if (!gridAnchor) {
+      return { lat: gps.lat, lon: gps.lon, snapped: false };
+    }
+    const snapped = snapCoordinateToGrid(gps.lat, gps.lon, gridAnchor, formState.spacingX, formState.spacingY);
+    return { lat: snapped.lat, lon: snapped.lon, snapped: true };
+  }, [gps, gridAnchor, formState.spacingX, formState.spacingY]);
+
+  const distanceFromAnchorM = useMemo(() => {
+    if (!gps || !gridAnchor) {
+      return null;
+    }
+    return calculateDistanceMeters(gridAnchor.lat, gridAnchor.lon, gps.lat, gps.lon);
+  }, [gps, gridAnchor]);
+
+  const handleSetGridAnchor = useCallback(() => {
+    if (!gps) {
+      showToast('GPS belum tersedia. Tidak bisa set titik awal.', 'error');
+      return;
+    }
+    setGridAnchor({ lat: gps.lat, lon: gps.lon, setAt: new Date().toISOString() });
+    showToast('Titik awal grid diset dari posisi saat ini.', 'success');
+  }, [gps, setGridAnchor, showToast]);
+
+  const handleClearGridAnchor = useCallback(() => {
+    setGridAnchor(null);
+    showToast('Titik awal grid direset.', 'info');
+  }, [setGridAnchor, showToast]);
+
   useEffect(() => {
     const onVisible = () => {
       if (document.visibilityState === 'visible' && isOnline) {
@@ -322,9 +411,17 @@ const App: React.FC = () => {
       }
     }
 
-    const lat = gps ? gps.lat : 0;
-    const lon = gps ? gps.lon : 0;
+    const rawLat = gps ? gps.lat : 0;
+    const rawLon = gps ? gps.lon : 0;
+    const snappedCoordinate = gps && gridAnchor
+      ? snapCoordinateToGrid(rawLat, rawLon, gridAnchor, formState.spacingX, formState.spacingY)
+      : null;
+    const lat = snappedCoordinate ? snappedCoordinate.lat : rawLat;
+    const lon = snappedCoordinate ? snappedCoordinate.lon : rawLon;
     const gpsQualityAtCapture = classifyGpsQualityAtCapture(gps);
+    const distanceToAnchor = gps && gridAnchor
+      ? calculateDistanceMeters(gridAnchor.lat, gridAnchor.lon, rawLat, rawLon)
+      : undefined;
 
     const newEntryMeta: Omit<PlantEntry, 'foto'> = {
       id,
@@ -345,6 +442,10 @@ const App: React.FC = () => {
       kesehatan: formState.kesehatan,
       gpsQualityAtCapture,
       gpsAccuracyAtCapture: gps?.accuracy,
+      rawKoordinat: `${rawLat.toFixed(6)},${rawLon.toFixed(6)}`,
+      gridAnchorKoordinat: gridAnchor ? `${gridAnchor.lat.toFixed(6)},${gridAnchor.lon.toFixed(6)}` : undefined,
+      distanceFromAnchorM: distanceToAnchor,
+      snappedToGrid: Boolean(snappedCoordinate),
       noPohon: entries.length + 1,
       uploaded: false,
       retryCount: 0,
@@ -448,7 +549,7 @@ const App: React.FC = () => {
       console.error(error);
       showToast('Gagal memproses gambar.', 'error');
     }
-  }, [formState, gps, entries.length, appsScriptUrl, showToast, isOnline]);
+  }, [formState, gps, gridAnchor, entries.length, appsScriptUrl, showToast, isOnline]);
 
   const handleClearData = async () => {
     if (window.confirm('Hapus semua data dari database lokal?')) {
@@ -473,6 +574,11 @@ const App: React.FC = () => {
         onShowSheet={() => setBottomSheetOpen(true)}
         showToast={showToast}
         isOnline={isOnline}
+        gridAnchor={gridAnchor}
+        distanceFromAnchorM={distanceFromAnchorM}
+        effectiveCoordinate={liveCoordinate}
+        onSetGridAnchor={handleSetGridAnchor}
+        onClearGridAnchor={handleClearGridAnchor}
       />
       <BottomSheet
         isOpen={isBottomSheetOpen}

@@ -19,6 +19,11 @@ interface CameraViewProps {
   onShowSheet: () => void;
   showToast: (message: string, type?: 'success' | 'error' | 'info') => void;
   isOnline: boolean;
+  gridAnchor: { lat: number; lon: number; setAt: string } | null;
+  distanceFromAnchorM: number | null;
+  effectiveCoordinate: { lat: number; lon: number; snapped: boolean } | null;
+  onSetGridAnchor: () => void;
+  onClearGridAnchor: () => void;
 }
 
 const PLANT_TYPES = ['Sengon', 'Nangka', 'Mahoni', 'Malapari'];
@@ -71,7 +76,25 @@ const IconCamera = () => (
   </svg>
 );
 
-export const CameraView: React.FC<CameraViewProps> = ({ onCapture, formState, onFormStateChange, entriesCount, pendingCount, isSyncing, lastSyncAt, gps, onGpsUpdate, onShowSheet, showToast, isOnline }) => {
+export const CameraView: React.FC<CameraViewProps> = ({
+  onCapture,
+  formState,
+  onFormStateChange,
+  entriesCount,
+  pendingCount,
+  isSyncing,
+  lastSyncAt,
+  gps,
+  onGpsUpdate,
+  onShowSheet,
+  showToast,
+  isOnline,
+  gridAnchor,
+  distanceFromAnchorM,
+  effectiveCoordinate,
+  onSetGridAnchor,
+  onClearGridAnchor,
+}) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const analysisCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -362,6 +385,48 @@ export const CameraView: React.FC<CameraViewProps> = ({ onCapture, formState, on
                  {lastSyncAt ? new Date(lastSyncAt).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) : '--:--'}
                </span>
              </div>
+           </div>
+
+           <div className="bg-black/30 backdrop-blur-md px-3 py-2 rounded-2xl border border-white/10 shadow-lg w-[220px]">
+             <div className="flex items-center justify-between">
+               <span className="text-[8px] font-black text-white/60 uppercase tracking-widest">Koordinat</span>
+               <span className="text-[8px] font-black uppercase tracking-widest text-blue-200">
+                 Grid {formState.spacingX}x{formState.spacingY}
+               </span>
+             </div>
+             <div className="mt-1 space-y-1">
+               <p className="text-[8px] text-white/70 font-bold">
+                 Current: {gps ? `${gps.lat.toFixed(6)}, ${gps.lon.toFixed(6)}` : '--'}
+               </p>
+               <p className="text-[8px] text-emerald-200 font-bold">
+                 {effectiveCoordinate
+                   ? `Capture: ${effectiveCoordinate.lat.toFixed(6)}, ${effectiveCoordinate.lon.toFixed(6)}`
+                   : 'Capture: --'}
+               </p>
+               <p className="text-[8px] text-white/60 font-bold">
+                 Anchor: {gridAnchor ? `${gridAnchor.lat.toFixed(6)}, ${gridAnchor.lon.toFixed(6)}` : '--'}
+               </p>
+               <p className="text-[8px] text-amber-200 font-bold">
+                 Accuracy*: {distanceFromAnchorM !== null ? `${distanceFromAnchorM.toFixed(1)} m` : '--'}
+               </p>
+             </div>
+             <div className="mt-2 flex gap-2">
+               <button
+                 onClick={onSetGridAnchor}
+                 className="flex-1 px-2 py-1 rounded-lg bg-blue-500/70 text-white text-[8px] font-black uppercase tracking-widest border border-blue-300/30"
+               >
+                 Set Awal
+               </button>
+               <button
+                 onClick={onClearGridAnchor}
+                 className="flex-1 px-2 py-1 rounded-lg bg-white/10 text-white/90 text-[8px] font-black uppercase tracking-widest border border-white/20"
+               >
+                 Reset
+               </button>
+             </div>
+             <p className="mt-1 text-[7px] text-white/40 leading-tight">
+               *Perbandingan jarak antara titik awal dan posisi GPS saat ini.
+             </p>
            </div>
            
            {!gps && (

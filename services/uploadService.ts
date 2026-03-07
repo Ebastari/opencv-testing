@@ -38,10 +38,20 @@ export const uploadToAppsScript = async (url: string, entry: PlantEntry): Promis
   // Teks path yang akan digunakan sebagai nama file di Drive dan referensi di Sheet
   const pathName = `Montana V2_Images/Gambar Montana (${entry.id}).jpg`;
   
+  const rawBase64 = (() => {
+    if (!entry.foto) {
+      return '';
+    }
+    if (!entry.foto.includes(',')) {
+      return entry.foto;
+    }
+    const parts = entry.foto.split(',');
+    return parts.length > 1 ? parts[1] : '';
+  })();
+
   /**
-   * Mengikuti logika snippet yang berhasil:
-   * 1. 'Gambar' diisi dengan data base64 LENGKAP (termasuk header data:image/jpeg...)
-   * 2. 'Gambar_Nama_File' diisi dengan path teks
+   * Payload diperkecil agar upload foto real tidak mudah melewati batas ukuran Apps Script.
+   * Script server V5 sudah mendukung RawBase64 sebagai sumber utama file gambar.
    */
   const payload = {
     "ID": entry.id,
@@ -56,7 +66,8 @@ export const uploadToAppsScript = async (url: string, entry: PlantEntry): Promis
     "Tahun Tanam": entry.tahunTanam,
     "Pengawas": entry.pengawas,
     "Vendor": entry.vendor,
-    "Gambar": entry.foto, // MENGIRIM DATA BASE64 LENGKAP (seperti di snippet)
+    // Fallback data URL tetap ada untuk kompatibilitas script lama, tetapi tidak wajib.
+    "Gambar": '',
     "Gambar_Nama_File": pathName, // PATH UNTUK DRIVE
     "Description": entry.description || "",
     "Link Drive": entry.linkDrive || "",
@@ -66,8 +77,8 @@ export const uploadToAppsScript = async (url: string, entry: PlantEntry): Promis
     "Kesehatan": entry.kesehatan,
     "GPS_Quality": entry.gpsQualityAtCapture || 'Tidak Tersedia',
     "GPS_Accuracy_M": Number.isFinite(entry.gpsAccuracyAtCapture) ? Number(entry.gpsAccuracyAtCapture).toFixed(1) : '',
-    "Base64": entry.foto.split(',')[1], // Cadangan data bersih jika dibutuhkan
-    "RawBase64": entry.foto.split(',')[1] // Cadangan data bersih jika dibutuhkan
+    "Base64": rawBase64,
+    "RawBase64": rawBase64
   };
 
   // 1) Coba kirim dengan CORS agar status sukses/error bisa diverifikasi dari JSON Apps Script.

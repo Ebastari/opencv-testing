@@ -24,6 +24,10 @@ export interface PlantEntry {
   kesehatan: 'Sehat' | 'Merana' | 'Mati';
   gpsQualityAtCapture?: 'Tinggi' | 'Sedang' | 'Rendah' | 'Tidak Tersedia';
   gpsAccuracyAtCapture?: number;
+  rawKoordinat?: string;
+  gridAnchorKoordinat?: string;
+  distanceFromAnchorM?: number;
+  snappedToGrid?: boolean;
   foto: string; // base64
   uploaded?: boolean;
   retryCount?: number;
@@ -45,6 +49,8 @@ export interface FormState {
   vendor: string;
   tim: string;
   kesehatan: 'Sehat' | 'Merana' | 'Mati';
+  spacingX: number;
+  spacingY: number;
 }
 
 export interface ToastState {

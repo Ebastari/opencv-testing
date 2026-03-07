@@ -202,6 +202,22 @@ const MapRecenter = ({ center }: { center: [number, number] }) => {
   return null;
 };
 
+const MapAutoFit = ({ points }: { points: [number, number][] }) => {
+  const map = useMap();
+  useEffect(() => {
+    if (points.length < 2) {
+      return;
+    }
+
+    map.fitBounds(points, {
+      padding: [20, 20],
+      maxZoom: 18,
+    });
+  }, [points, map]);
+
+  return null;
+};
+
 export const AnalyticsPanel: React.FC<{ entries: PlantEntry[] }> = ({ entries }) => {
   const [isLeafletReady, setIsLeafletReady] = useState(false);
   const [isImageAnalysisRunning, setIsImageAnalysisRunning] = useState(false);
@@ -371,6 +387,12 @@ export const AnalyticsPanel: React.FC<{ entries: PlantEntry[] }> = ({ entries })
     if (valid.length === 0) return [-2.979129, 115.199507];
     const last = valid[valid.length - 1];
     return [last.gps!.lat, last.gps!.lon];
+  }, [entries]);
+
+  const mapPoints = useMemo<[number, number][]>(() => {
+    return entries
+      .filter((entry) => entry.gps && entry.gps.lat !== 0 && entry.gps.lon !== 0)
+      .map((entry) => [entry.gps!.lat, entry.gps!.lon]);
   }, [entries]);
 
   const treeRecords = useMemo<TreeRecord[]>(() => {
@@ -588,12 +610,13 @@ export const AnalyticsPanel: React.FC<{ entries: PlantEntry[] }> = ({ entries })
         <div className="h-[350px] w-full rounded-[2.5rem] overflow-hidden border border-slate-100 shadow-xl relative z-0">
           <MapContainer
             center={mapCenter as [number, number]}
-            zoom={18}
+            zoom={16}
             scrollWheelZoom={false}
             style={{ height: '100%', width: '100%' }}
           >
             <TileLayer url="https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}" />
             <MapRecenter center={mapCenter as [number, number]} />
+            <MapAutoFit points={mapPoints} />
             {entries
               .filter((e) => e.gps && e.gps.lat !== 0)
               .map((entry) => (

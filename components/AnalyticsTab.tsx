@@ -51,6 +51,45 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({ entries, appsScriptU
     return Number.isFinite(parsed) ? parsed : 0;
   };
 
+  const pickField = (row: Record<string, any>, keys: string[]): unknown => {
+    for (const key of keys) {
+      if (row[key] !== undefined && row[key] !== null && row[key] !== '') {
+        return row[key];
+      }
+    }
+    return undefined;
+  };
+
+  const parseCoordinatePair = (value: unknown): { lat: number; lon: number } | null => {
+    const raw = String(value ?? '').trim();
+    if (!raw) {
+      return null;
+    }
+
+    // Pola utama: "lat,lon" atau "lat;lon"
+    const separator = raw.includes(';') ? ';' : ',';
+    const split = raw.split(separator).map((part) => part.trim());
+    if (split.length >= 2) {
+      const first = parseNumber(split[0]);
+      const second = parseNumber(split[1]);
+      if (Number.isFinite(first) && Number.isFinite(second)) {
+        return { lat: first, lon: second };
+      }
+    }
+
+    // Fallback: ekstrak dua angka pertama dari string bebas.
+    const nums = raw.match(/-?\d+(?:[.,]\d+)?/g);
+    if (nums && nums.length >= 2) {
+      const first = parseNumber(nums[0]);
+      const second = parseNumber(nums[1]);
+      if (Number.isFinite(first) && Number.isFinite(second)) {
+        return { lat: first, lon: second };
+      }
+    }
+
+    return null;
+  };
+
   const normalizeHealth = (value: unknown): PlantEntry['kesehatan'] => {
     const raw = String(value ?? '').trim().toLowerCase();
 
@@ -72,36 +111,55 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({ entries, appsScriptU
     const map = new Map();
     
     // Masukkan data cloud dulu
-    cloudData.forEach(item => {
-      if (!item || !item.ID) return;
+    cloudData.forEach((item, index) => {
+      if (!item || typeof item !== 'object') return;
+
+      const row = item as Record<string, any>;
+      const idValue = pickField(row, ['ID', 'Id', 'id']);
+      const rowId = String(idValue ?? `cloud-${index}`);
 
       // Parsing Koordinat dengan aman (menangani jika data sudah berupa number dari Apps Script)
       let lat = 0;
       let lon = 0;
       let hasGps = false;
 
-      if (item.X !== undefined && item.X !== null && item.Y !== undefined && item.Y !== null) {
-        lat = parseNumber(item.X);
-        lon = parseNumber(item.Y);
-        if (!isNaN(lat) && !isNaN(lon)) {
+      const xValue = pickField(row, ['X', 'x', 'Lat', 'Latitude', 'latitude']);
+      const yValue = pickField(row, ['Y', 'y', 'Lon', 'Longitude', 'longitude']);
+
+      if (xValue !== undefined && yValue !== undefined) {
+        lat = parseNumber(xValue);
+        lon = parseNumber(yValue);
+        if (Number.isFinite(lat) && Number.isFinite(lon) && (lat !== 0 || lon !== 0)) {
           hasGps = true;
         }
       }
 
-      const gpsAccuracy = parseNumber(item.GPS_Accuracy_M ?? item.Akurasi ?? item.Accuracy);
+      if (!hasGps) {
+        const koordinatRaw = pickField(row, ['Koordinat', 'koordinat', 'Lokasi', 'lokasi']);
+        const parsedPair = parseCoordinatePair(koordinatRaw);
+        if (parsedPair && (parsedPair.lat !== 0 || parsedPair.lon !== 0)) {
+          lat = parsedPair.lat;
+          lon = parsedPair.lon;
+          hasGps = true;
+        }
+      }
+
+      const gpsAccuracy = parseNumber(
+        pickField(row, ['GPS_Accuracy_M', 'GPS Accuracy', 'Akurasi', 'Accuracy']),
+      );
 
       const entry: Partial<PlantEntry> = {
-        id: String(item.ID),
-        noPohon: parseInt(item["No Pohon"]) || 0,
-        tanaman: item.Tanaman || 'Unknown',
-        tinggi: parseNumber(item.Tinggi),
-        kesehatan: normalizeHealth(item.Kesehatan),
-        pengawas: item.Pengawas || 'N/A',
-        tanggal: item.Tanggal || '-',
-        foto: item["Link Drive"] || '', // Gunakan link drive untuk cloud
+        id: rowId,
+        noPohon: parseInt(String(pickField(row, ['No Pohon', 'noPohon', 'NoPohon']) ?? 0), 10) || 0,
+        tanaman: String(pickField(row, ['Tanaman', 'tanaman', 'Jenis']) ?? 'Unknown'),
+        tinggi: parseNumber(pickField(row, ['Tinggi', 'tinggi', 'Height'])),
+        kesehatan: normalizeHealth(pickField(row, ['Kesehatan', 'kesehatan', 'Health'])),
+        pengawas: String(pickField(row, ['Pengawas', 'pengawas', 'Supervisor']) ?? 'N/A'),
+        tanggal: String(pickField(row, ['Tanggal', 'tanggal', 'CreatedAt']) ?? '-'),
+        foto: String(pickField(row, ['Link Drive', 'LinkDrive', 'Foto', 'foto', 'Image']) ?? ''),
         gps: hasGps ? { lat, lon, accuracy: gpsAccuracy > 0 ? gpsAccuracy : 0 } : undefined
       };
-      map.set(String(item.ID), entry);
+      map.set(rowId, entry);
     });
 
     // Masukkan/Timpa dengan data lokal (lebih fresh)

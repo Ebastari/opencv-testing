@@ -120,6 +120,41 @@ export const FormTab: React.FC<FormTabProps> = ({ formState, onFormStateChange }
           </div>
         </div>
 
+        <div className="grid grid-cols-2 gap-4 mt-4">
+          <div className="space-y-2">
+            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-1">Jarak Tanam X (m)</label>
+            <div className="relative">
+              <input
+                type="number"
+                name="spacingX"
+                min={1}
+                max={20}
+                step={0.5}
+                value={formState.spacingX}
+                onChange={handleFormChange}
+                className="w-full bg-slate-50 border border-slate-100 rounded-2xl p-4 text-sm font-bold text-slate-700 focus:ring-4 focus:ring-emerald-500/10 focus:border-emerald-500 outline-none transition-all shadow-sm"
+              />
+              <span className="absolute right-4 top-1/2 -translate-y-1/2 text-[10px] font-black text-slate-300">M</span>
+            </div>
+          </div>
+          <div className="space-y-2">
+            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-1">Jarak Tanam Y (m)</label>
+            <div className="relative">
+              <input
+                type="number"
+                name="spacingY"
+                min={1}
+                max={20}
+                step={0.5}
+                value={formState.spacingY}
+                onChange={handleFormChange}
+                className="w-full bg-slate-50 border border-slate-100 rounded-2xl p-4 text-sm font-bold text-slate-700 focus:ring-4 focus:ring-emerald-500/10 focus:border-emerald-500 outline-none transition-all shadow-sm"
+              />
+              <span className="absolute right-4 top-1/2 -translate-y-1/2 text-[10px] font-black text-slate-300">M</span>
+            </div>
+          </div>
+        </div>
+
         <div className="mt-6 space-y-2">
           <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-1">Status Kesehatan</label>
           <div className="relative">
