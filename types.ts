@@ -38,6 +38,9 @@ export interface PlantEntry {
   linkDrive?: string;
   statusDuplikat?: string;
   statusVerifikasi?: string;
+  aiKesehatan?: 'Sehat' | 'Merana' | 'Mati';
+  aiConfidence?: number;
+  hcvInput?: number;
 }
 
 export interface FormState {

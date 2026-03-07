@@ -25,6 +25,8 @@ const DEFAULT_HEADERS = [
   'Pekerjaan',
   'Tinggi',
   'Koordinat',
+  'Koordinat_Asli',
+  'Koordinat_Revisi',
   'Y',
   'X',
   'Tanaman',
@@ -34,6 +36,9 @@ const DEFAULT_HEADERS = [
   'Link Drive',
   'No Pohon',
   'Kesehatan',
+  'AI_Kesehatan',
+  'AI_Confidence',
+  'HCV_Input',
   'poop',
   'Status_Duplikat',
   'Eco_BiomassaKg',
@@ -300,16 +305,27 @@ function appendMonitoringRow_(sheet, payload) {
   const pengawas = String(payload.Pengawas || payload.pengawas || '').trim();
   const vendor = String(payload.Vendor || payload.vendor || '').trim();
   const kesehatan = normalizeHealth_(payload.Kesehatan || payload.kesehatan || 'Sehat');
+  const aiKesehatanRaw = String(payload.AI_Kesehatan || payload.aiKesehatan || '').trim();
+  const aiKesehatan = aiKesehatanRaw ? normalizeHealth_(aiKesehatanRaw) : '';
+  const aiConfidence = toNumberOrBlank_(payload.AI_Confidence ?? payload.aiConfidence);
+  const hcvInput = toNumberOrBlank_(payload.HCV_Input ?? payload.hcvInput);
 
   const coords = resolveCoordinates_(payload);
   const lokasiRaw = String(payload.Lokasi || payload.lokasi || coords.text).trim();
   const koordinatRaw = String(payload.Koordinat || payload.koordinat || coords.text).trim();
   const lokasi = lokasiRaw.toLowerCase().includes('nan') ? coords.text : lokasiRaw;
-  const koordinat = koordinatRaw.toLowerCase().includes('nan') ? coords.text : koordinatRaw;
+  const koordinatUser = koordinatRaw.toLowerCase().includes('nan') ? coords.text : koordinatRaw;
+
+  const userFixed = getFixedLatLon_(payload.X !== undefined ? payload.X : coords.lat, payload.Y !== undefined ? payload.Y : coords.lon, koordinatUser || lokasi);
+  const revisedFixed = computeRevisedCoordinate_(sheet, headerIndex, userFixed);
+
+  const koordinatAsli = userFixed ? toCoordinateText_(userFixed.lat, userFixed.lon) : koordinatUser;
+  const koordinatRevisi = revisedFixed ? toCoordinateText_(revisedFixed.lat, revisedFixed.lon) : koordinatAsli;
+  const koordinat = koordinatRevisi || koordinatAsli || koordinatUser;
 
   // Y dipertahankan sebagai longitude, X sebagai latitude agar kompatibel data lama aplikasi.
-  const y = payload.Y !== undefined ? payload.Y : (Number.isFinite(coords.lon) ? coords.lon : '');
-  const x = payload.X !== undefined ? payload.X : (Number.isFinite(coords.lat) ? coords.lat : '');
+  const y = revisedFixed ? revisedFixed.lon : (Number.isFinite(coords.lon) ? coords.lon : '');
+  const x = revisedFixed ? revisedFixed.lat : (Number.isFinite(coords.lat) ? coords.lat : '');
 
   const linkDrive = saveImageAndReturnUrl_(payload, id) || String(payload['Link Drive'] || payload.linkDrive || '').trim();
   const poop = String(payload.poop || buildPoopHtml_(linkDrive)).trim();
@@ -329,6 +345,8 @@ function appendMonitoringRow_(sheet, payload) {
   setByHeader_(row, headerIndex, 'Pekerjaan', pekerjaan);
   setByHeader_(row, headerIndex, 'Tinggi', tinggi);
   setByHeader_(row, headerIndex, 'Koordinat', koordinat);
+  setByHeader_(row, headerIndex, 'Koordinat_Asli', koordinatAsli);
+  setByHeader_(row, headerIndex, 'Koordinat_Revisi', koordinatRevisi);
   setByHeader_(row, headerIndex, 'Y', normalizeCoordText_(y));
   setByHeader_(row, headerIndex, 'X', normalizeCoordText_(x));
   setByHeader_(row, headerIndex, 'Tanaman', tanaman);
@@ -338,6 +356,9 @@ function appendMonitoringRow_(sheet, payload) {
   setByHeader_(row, headerIndex, 'Link Drive', linkDrive);
   setByHeader_(row, headerIndex, 'No Pohon', noPohon);
   setByHeader_(row, headerIndex, 'Kesehatan', kesehatan);
+  setByHeader_(row, headerIndex, 'AI_Kesehatan', aiKesehatan);
+  setByHeader_(row, headerIndex, 'AI_Confidence', aiConfidence);
+  setByHeader_(row, headerIndex, 'HCV_Input', hcvInput);
   setByHeader_(row, headerIndex, 'poop', poop);
   setByHeader_(row, headerIndex, 'Status_Duplikat', statusDuplikat);
 
@@ -948,10 +969,12 @@ function computeEcologyFromRows_(headers, dataRows) {
     const tinggiCm = toNumber_(idx['Tinggi'] >= 0 ? row[idx['Tinggi']] : '');
     const x = idx['X'] >= 0 ? row[idx['X']] : '';
     const y = idx['Y'] >= 0 ? row[idx['Y']] : '';
+    const koordinatRevisi = idx['Koordinat_Revisi'] >= 0 ? row[idx['Koordinat_Revisi']] : '';
     const koordinat = idx['Koordinat'] >= 0 ? row[idx['Koordinat']] : '';
     const lokasi = idx['Lokasi'] >= 0 ? row[idx['Lokasi']] : '';
-    const fixed = getFixedLatLon_(x, y, koordinat || lokasi);
+    const fixed = getFixedLatLon_(x, y, koordinatRevisi || koordinat || lokasi);
     const gpsAccuracy = toNumber_(idx['GPS_Accuracy_M'] >= 0 ? row[idx['GPS_Accuracy_M']] : '');
+    const hcvInput = toNumber_(idx['HCV_Input'] >= 0 ? row[idx['HCV_Input']] : '');
 
     return {
       rowNumber: rowNumber,
@@ -963,6 +986,7 @@ function computeEcologyFromRows_(headers, dataRows) {
       lat: fixed ? fixed.lat : NaN,
       lon: fixed ? fixed.lon : NaN,
       accuracy: Number.isFinite(gpsAccuracy) ? gpsAccuracy : NaN,
+      hcvInput: Number.isFinite(hcvInput) ? hcvInput : NaN,
     };
   });
 
@@ -1093,6 +1117,22 @@ function estimateCanopyCoverPct_(heightsCm, totalTrees) {
 function computeHcvHealthIndex_(treeRows) {
   if (!treeRows || treeRows.length === 0) {
     return 0;
+  }
+
+  const explicitScores = treeRows
+    .map(function (tree) {
+      return Number(tree.hcvInput);
+    })
+    .filter(function (value) {
+      return Number.isFinite(value);
+    });
+
+  // Jika operator sudah mengirim HCV otomatis dari aplikasi, pakai itu sebagai sumber utama.
+  if (explicitScores.length > 0) {
+    const avg = explicitScores.reduce(function (acc, cur) {
+      return acc + cur;
+    }, 0) / explicitScores.length;
+    return round_(Math.max(0, Math.min(100, avg)), 2);
   }
 
   let score = 0;
@@ -1451,6 +1491,130 @@ function getDuplicateColumnIndexes_(headers) {
   }
 
   return duplicates;
+}
+
+function computeRevisedCoordinate_(sheet, headerIndex, userFixed) {
+  if (!userFixed || !Number.isFinite(userFixed.lat) || !Number.isFinite(userFixed.lon)) {
+    return null;
+  }
+
+  const prev = getLastRevisedCoordinate_(sheet, headerIndex);
+  if (!prev) {
+    return userFixed;
+  }
+
+  const stepMeters = IDEAL_SPACING_M;
+  const distToUser = haversineMeters_(prev.lat, prev.lon, userFixed.lat, userFixed.lon);
+  if (!Number.isFinite(distToUser) || distToUser <= 0.05) {
+    // Jika titik user hampir sama dengan titik sebelumnya, geser default ke timur sejauh 4m.
+    return destinationPointMeters_(prev.lat, prev.lon, 90, stepMeters);
+  }
+
+  // Gerak 4m dari titik revisi sebelumnya menuju arah titik asli user.
+  const bearing = bearingDegrees_(prev.lat, prev.lon, userFixed.lat, userFixed.lon);
+  const candidate = destinationPointMeters_(prev.lat, prev.lon, bearing, stepMeters);
+  if (!candidate) {
+    return userFixed;
+  }
+
+  // Jika candidate terlalu jauh dari titik asli user, tarik ke arah user agar tetap relevan.
+  const candidateToUser = haversineMeters_(candidate.lat, candidate.lon, userFixed.lat, userFixed.lon);
+  if (Number.isFinite(candidateToUser) && candidateToUser > 8) {
+    const pullBearing = bearingDegrees_(candidate.lat, candidate.lon, userFixed.lat, userFixed.lon);
+    const pullMeters = Math.min(candidateToUser, 4);
+    const pulled = destinationPointMeters_(candidate.lat, candidate.lon, pullBearing, pullMeters);
+    return pulled || candidate;
+  }
+
+  return candidate;
+}
+
+function getLastRevisedCoordinate_(sheet, headerIndex) {
+  const idxRevisi = headerIndex['Koordinat_Revisi'];
+  const idxKoordinat = headerIndex['Koordinat'];
+  const idxX = headerIndex['X'];
+  const idxY = headerIndex['Y'];
+  const lastRow = sheet.getLastRow();
+  if (lastRow <= 1) {
+    return null;
+  }
+
+  const values = sheet.getRange(2, 1, lastRow - 1, sheet.getLastColumn()).getValues();
+  for (var i = values.length - 1; i >= 0; i--) {
+    const row = values[i];
+    const text = idxRevisi >= 0
+      ? String(row[idxRevisi] || '').trim()
+      : idxKoordinat >= 0
+        ? String(row[idxKoordinat] || '').trim()
+        : '';
+    const x = idxX >= 0 ? row[idxX] : '';
+    const y = idxY >= 0 ? row[idxY] : '';
+    const fixed = getFixedLatLon_(x, y, text);
+    if (fixed) {
+      return fixed;
+    }
+  }
+
+  return null;
+}
+
+function bearingDegrees_(lat1, lon1, lat2, lon2) {
+  const toRad = function (deg) {
+    return (deg * Math.PI) / 180;
+  };
+  const toDeg = function (rad) {
+    return (rad * 180) / Math.PI;
+  };
+
+  const phi1 = toRad(lat1);
+  const phi2 = toRad(lat2);
+  const deltaLon = toRad(lon2 - lon1);
+
+  const y = Math.sin(deltaLon) * Math.cos(phi2);
+  const x = Math.cos(phi1) * Math.sin(phi2) - Math.sin(phi1) * Math.cos(phi2) * Math.cos(deltaLon);
+  const theta = Math.atan2(y, x);
+  return (toDeg(theta) + 360) % 360;
+}
+
+function destinationPointMeters_(lat, lon, bearingDeg, distanceM) {
+  if (!Number.isFinite(lat) || !Number.isFinite(lon) || !Number.isFinite(bearingDeg) || !Number.isFinite(distanceM) || distanceM <= 0) {
+    return null;
+  }
+
+  const earthRadius = 6371000;
+  const toRad = function (deg) {
+    return (deg * Math.PI) / 180;
+  };
+  const toDeg = function (rad) {
+    return (rad * 180) / Math.PI;
+  };
+
+  const brng = toRad(bearingDeg);
+  const angDist = distanceM / earthRadius;
+  const lat1 = toRad(lat);
+  const lon1 = toRad(lon);
+
+  const lat2 = Math.asin(
+    Math.sin(lat1) * Math.cos(angDist) + Math.cos(lat1) * Math.sin(angDist) * Math.cos(brng),
+  );
+  const lon2 = lon1 + Math.atan2(
+    Math.sin(brng) * Math.sin(angDist) * Math.cos(lat1),
+    Math.cos(angDist) - Math.sin(lat1) * Math.sin(lat2),
+  );
+
+  const out = {
+    lat: toDeg(lat2),
+    lon: ((toDeg(lon2) + 540) % 360) - 180,
+  };
+
+  return isValidLatLon_(out.lat, out.lon) ? out : null;
+}
+
+function toCoordinateText_(lat, lon) {
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+    return '';
+  }
+  return round_(lat, 6) + ',' + round_(lon, 6);
 }
 
 function analyzeGpsAccuracyFromRows_(trees) {

@@ -10,6 +10,7 @@ import { PlantEntry, GpsLocation, ToastState, FormState } from './types';
 import { Toast } from './components/Toast';
 import { getAllEntries, saveEntry, updateEntrySyncMeta, clearAllEntries } from './services/dbService';
 import { checkInternetConnection } from './services/networkService';
+import type { PlantHealthResult } from './ecology/plantHealth';
 
 const RETRY_BASE_DELAY_MS = 15000;
 const RETRY_MAX_DELAY_MS = 5 * 60 * 1000;
@@ -34,8 +35,11 @@ const dataUrlToFile = async (dataUrl: string, fileName: string): Promise<File> =
 
 const GPS_ACCURACY_THRESHOLD_M = 20;
 const DESKTOP_GPS_ACCURACY_THRESHOLD_M = 60;
-const DEFAULT_APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbw_B-b96eu94j562hLAYKTMLLe9XhTMDS5JhL_GoPzb5OGpDrQ2JHfaiPgXW4lUbMwV_Q/exec';
-const LEGACY_APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxPDvlK5Xk2WgcEsbqZtUH-k69_Xj3oXU8ciOJP8Y3e0twb4O-T1rNwLWUUTsTt2tmu9A/exec';
+const DEFAULT_APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwv1eXbUMODTxqoUrxuN2ezFb0E6E34hdJvmLHclmIC5v76yrnT5PvUuthYQahcaskwjA/exec';
+const LEGACY_APPS_SCRIPT_URLS = [
+  'https://script.google.com/macros/s/AKfycbw_B-b96eu94j562hLAYKTMLLe9XhTMDS5JhL_GoPzb5OGpDrQ2JHfaiPgXW4lUbMwV_Q/exec',
+  'https://script.google.com/macros/s/AKfycbxPDvlK5Xk2WgcEsbqZtUH-k69_Xj3oXU8ciOJP8Y3e0twb4O-T1rNwLWUUTsTt2tmu9A/exec',
+];
 
 interface GridAnchor {
   lat: number;
@@ -147,6 +151,23 @@ const classifyGpsQualityAtCapture = (
   return 'Rendah';
 };
 
+const mapHealthToHcvWeight = (health: 'Sehat' | 'Merana' | 'Mati'): number => {
+  if (health === 'Sehat') return 1;
+  if (health === 'Merana') return 0.5;
+  return 0;
+};
+
+const toHcvInputFromAI = (aiHealth?: PlantHealthResult | null): number | undefined => {
+  if (!aiHealth) {
+    return undefined;
+  }
+
+  const confidence = Number(aiHealth.confidence);
+  const safeConfidence = Number.isFinite(confidence) ? Math.max(0, Math.min(100, confidence)) : 0;
+  const hcv = mapHealthToHcvWeight(aiHealth.health) * safeConfidence;
+  return Math.round(hcv * 100) / 100;
+};
+
 const App: React.FC = () => {
   const [entries, setEntries] = useState<PlantEntry[]>([]);
   const [isBottomSheetOpen, setBottomSheetOpen] = useState(false);
@@ -178,7 +199,7 @@ const App: React.FC = () => {
 
   useEffect(() => {
     const current = String(appsScriptUrl || '').trim();
-    if (!current || current === LEGACY_APPS_SCRIPT_URL || current.includes('/s/.../exec')) {
+    if (!current || LEGACY_APPS_SCRIPT_URLS.includes(current) || current.includes('/s/.../exec')) {
       setAppsScriptUrl(DEFAULT_APPS_SCRIPT_URL);
     }
   }, [appsScriptUrl, setAppsScriptUrl]);
@@ -456,7 +477,7 @@ const App: React.FC = () => {
     };
   }, [isOnline, syncPendingEntries]);
 
-  const handleCapture = useCallback(async (dataUrl: string) => {
+  const handleCapture = useCallback(async (dataUrl: string, aiHealth?: PlantHealthResult | null) => {
     const timestamp = new Date();
     const pad = (n: number, len: number = 2) => n.toString().padStart(len, '0');
     const id = `${timestamp.getFullYear()}${pad(timestamp.getMonth() + 1)}${pad(timestamp.getDate())}-${pad(timestamp.getHours())}${pad(timestamp.getMinutes())}${pad(timestamp.getSeconds())}${pad(timestamp.getMilliseconds(), 3)}`;
@@ -499,6 +520,10 @@ const App: React.FC = () => {
       ? calculateDistanceMeters(anchorForCapture.lat, anchorForCapture.lon, rawLat, rawLon)
       : undefined;
 
+    const kesehatanFinal = aiHealth?.health || formState.kesehatan;
+    const aiConfidence = aiHealth ? Number(aiHealth.confidence) : undefined;
+    const hcvInput = toHcvInputFromAI(aiHealth);
+
     const newEntryMeta: Omit<PlantEntry, 'foto'> = {
       id,
       tanggal: timestamp.toLocaleString('id-ID'),
@@ -515,7 +540,7 @@ const App: React.FC = () => {
       pengawas: formState.pengawas,
       vendor: formState.vendor,
       tim: formState.tim,
-      kesehatan: formState.kesehatan,
+      kesehatan: kesehatanFinal,
       gpsQualityAtCapture,
       gpsAccuracyAtCapture: hasValidGps ? gps.accuracy : undefined,
       rawKoordinat: `${rawLat.toFixed(6)},${rawLon.toFixed(6)}`,
@@ -527,7 +552,10 @@ const App: React.FC = () => {
       noPohon: entries.length + 1,
       uploaded: false,
       retryCount: 0,
-      statusDuplikat: "UNIK"
+      statusDuplikat: "UNIK",
+      aiKesehatan: aiHealth?.health,
+      aiConfidence: Number.isFinite(aiConfidence) ? aiConfidence : undefined,
+      hcvInput,
     };
 
     try {

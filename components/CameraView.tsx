@@ -7,7 +7,7 @@ import { InfoOverlay } from './InfoOverlay';
 import { analyzePlantHealthHSV, type PlantHealthResult } from '../ecology/plantHealth';
 
 interface CameraViewProps {
-  onCapture: (dataUrl: string) => void;
+  onCapture: (dataUrl: string, aiHealth?: PlantHealthResult | null) => void;
   formState: FormState;
   onFormStateChange: React.Dispatch<React.SetStateAction<FormState>>;
   entriesCount: number;
@@ -250,8 +250,8 @@ export const CameraView: React.FC<CameraViewProps> = ({
     ctx.fillText(BRAND_NAME, canvas.width - margin - brandWidth, margin + lh);
 
     // Kirim data JPEG kualitas tinggi
-    onCapture(canvas.toDataURL('image/jpeg', 0.85));
-  }, [onCapture, formState, gps, entriesCount, showToast]);
+    onCapture(canvas.toDataURL('image/jpeg', 0.85), livePlantHealth);
+  }, [onCapture, formState, gps, entriesCount, showToast, livePlantHealth]);
 
   useEffect(() => {
     let timerId: number | null = null;
