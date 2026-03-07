@@ -33,7 +33,18 @@ export const uploadToAppsScript = async (url: string, entry: PlantEntry): Promis
   }
 
   // Mengonversi titik ke koma untuk koordinat X dan Y sesuai format laporan di snippet
-  const formatCoord = (num: number) => num.toString().replace('.', ',');
+  const formatCoord = (num: number) => (Number.isFinite(num) ? num.toString().replace('.', ',') : '');
+
+  const buildCoordText = (lat: number, lon: number): string => {
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+      return '';
+    }
+    return `${lat.toFixed(6)},${lon.toFixed(6)}`;
+  };
+
+  const safeX = Number.isFinite(entry.x) ? entry.x : NaN;
+  const safeY = Number.isFinite(entry.y) ? entry.y : NaN;
+  const safeCoordText = buildCoordText(safeX, safeY);
 
   // Teks path yang akan digunakan sebagai nama file di Drive dan referensi di Sheet
   const pathName = `Montana V2_Images/Gambar Montana (${entry.id}).jpg`;
@@ -56,12 +67,12 @@ export const uploadToAppsScript = async (url: string, entry: PlantEntry): Promis
   const payload = {
     "ID": entry.id,
     "Tanggal": entry.tanggal,
-    "Lokasi": entry.lokasi,
+    "Lokasi": entry.lokasi?.includes('NaN') ? safeCoordText : entry.lokasi,
     "Pekerjaan": entry.pekerjaan || "",
     "Tinggi": entry.tinggi,
-    "Koordinat": entry.koordinat,
-    "Y": formatCoord(entry.y), // Longitude
-    "X": formatCoord(entry.x), // Latitude
+    "Koordinat": entry.koordinat?.includes('NaN') ? safeCoordText : entry.koordinat,
+    "Y": formatCoord(safeY), // Longitude
+    "X": formatCoord(safeX), // Latitude
     "Tanaman": entry.tanaman,
     "Tahun Tanam": entry.tahunTanam,
     "Pengawas": entry.pengawas,

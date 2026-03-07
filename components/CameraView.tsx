@@ -21,7 +21,7 @@ interface CameraViewProps {
   isOnline: boolean;
   gridAnchor: { lat: number; lon: number; setAt: string } | null;
   distanceFromAnchorM: number | null;
-  effectiveCoordinate: { lat: number; lon: number; snapped: boolean } | null;
+  effectiveCoordinate: { lat: number; lon: number; snapped: boolean; stepX: number; stepY: number } | null;
   onSetGridAnchor: () => void;
   onClearGridAnchor: () => void;
 }
@@ -106,6 +106,13 @@ export const CameraView: React.FC<CameraViewProps> = ({
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [needsUserAction, setNeedsUserAction] = useState(false);
   const [livePlantHealth, setLivePlantHealth] = useState<PlantHealthResult | null>(null);
+  const canSetAnchor = Boolean(
+    gps &&
+    Number.isFinite(gps.lat) &&
+    Number.isFinite(gps.lon) &&
+    Math.abs(gps.lat) <= 90 &&
+    Math.abs(gps.lon) <= 180,
+  );
   
   const progressPercentage = useMemo(() => Math.min(100, (entriesCount / DAILY_TARGET) * 100), [entriesCount]);
 
@@ -361,97 +368,93 @@ export const CameraView: React.FC<CameraViewProps> = ({
           </a>
         </div>
 
-        <div className="flex flex-col items-end gap-2 pointer-events-auto">
-           <div className="bg-black/30 backdrop-blur-md px-3 py-1.5 rounded-2xl border border-white/5 flex flex-col items-end shadow-lg">
-              <div className="flex items-center gap-2">
-                <span className="text-[8px] font-black text-white/40 uppercase tracking-widest">Progress</span>
-                <span className="text-[10px] font-bold text-white">{entriesCount} / {DAILY_TARGET}</span>
+        <div className="flex flex-col items-end gap-2 pointer-events-auto max-w-[220px]">
+          <div className="w-full bg-black/35 backdrop-blur-md px-3 py-2 rounded-2xl border border-white/10 shadow-lg">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[8px] font-black text-white/60 uppercase tracking-widest">Progress</span>
+              <span className="text-[10px] font-bold text-white">{entriesCount}/{DAILY_TARGET}</span>
+            </div>
+            <div className="w-full h-1 bg-white/10 rounded-full mt-1 overflow-hidden">
+              <div className="h-full bg-blue-500 transition-all duration-700" style={{ width: `${progressPercentage}%` }} />
+            </div>
+
+            <div className="mt-2 flex items-center justify-between">
+              <span className={`text-[8px] font-black uppercase tracking-widest ${isSyncing ? 'text-blue-300' : isOnline ? 'text-emerald-300' : 'text-amber-300'}`}>
+                {isSyncing ? 'SYNCING' : isOnline ? 'ONLINE' : 'OFFLINE'}
+              </span>
+              <span className="text-[8px] text-white/60 font-bold">Pending {pendingCount}</span>
+            </div>
+            <p className="mt-0.5 text-[7px] text-white/45 font-bold">
+              Last sync {lastSyncAt ? new Date(lastSyncAt).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) : '--:--'}
+            </p>
+
+            <div className="mt-2 pt-2 border-t border-white/10">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[8px] font-black text-white/70 uppercase tracking-widest">Grid {formState.spacingX}x{formState.spacingY}</span>
+                <span className={`text-[8px] font-black uppercase tracking-widest ${gridAnchor ? 'text-emerald-200' : 'text-amber-200'}`}>
+                  {gridAnchor ? 'AKTIF' : 'MANUAL GPS'}
+                </span>
               </div>
-              <div className="w-20 h-1 bg-white/10 rounded-full mt-1.5 overflow-hidden">
-                <div className="h-full bg-blue-500 transition-all duration-700" style={{ width: `${progressPercentage}%` }} />
+
+              <p className="mt-1 text-[8px] text-white/75 font-bold truncate">
+                RAW {gps ? `${gps.lat.toFixed(6)}, ${gps.lon.toFixed(6)}` : '--'}
+              </p>
+              <p className="mt-0.5 text-[8px] text-emerald-200 font-bold truncate">
+                SNAP {effectiveCoordinate ? `${effectiveCoordinate.lat.toFixed(6)}, ${effectiveCoordinate.lon.toFixed(6)}` : '--'}
+              </p>
+
+              {gridAnchor && (
+                <p className="mt-0.5 text-[8px] text-amber-200 font-bold">
+                  Step {effectiveCoordinate ? `${effectiveCoordinate.stepX}, ${effectiveCoordinate.stepY}` : '--'} | Dist {distanceFromAnchorM !== null ? `${distanceFromAnchorM.toFixed(2)}m` : '--'}
+                </p>
+              )}
+              <p className="mt-0.5 text-[7px] text-white/45">
+                Step berubah saat geser melewati batas grid.
+              </p>
+
+              <div className="mt-2 grid grid-cols-2 gap-1.5">
+                <button
+                  onClick={onSetGridAnchor}
+                  disabled={!canSetAnchor}
+                  className="px-2 py-1 rounded-lg bg-blue-500/70 disabled:bg-blue-500/25 text-white text-[8px] font-black uppercase tracking-widest border border-blue-300/30"
+                >
+                  Set Awal
+                </button>
+                <button
+                  onClick={onClearGridAnchor}
+                  className="px-2 py-1 rounded-lg bg-white/10 text-white/90 text-[8px] font-black uppercase tracking-widest border border-white/20"
+                >
+                  Reset
+                </button>
               </div>
-           </div>
+            </div>
+          </div>
 
-           <div className="bg-black/30 backdrop-blur-md px-3 py-1.5 rounded-2xl border border-white/10 shadow-lg w-[170px]">
-             <div className="flex items-center justify-between">
-               <span className="text-[8px] font-black text-white/60 uppercase tracking-widest">Sync</span>
-               <span className={`text-[8px] font-black uppercase tracking-widest ${isSyncing ? 'text-blue-300' : isOnline ? 'text-emerald-300' : 'text-amber-300'}`}>
-                 {isSyncing ? 'SYNCING' : isOnline ? 'ONLINE' : 'OFFLINE'}
-               </span>
-             </div>
-             <div className="mt-1 flex items-center justify-between">
-               <span className="text-[8px] text-white/50 font-bold">Pending: {pendingCount}</span>
-               <span className="text-[8px] text-white/50 font-bold">
-                 {lastSyncAt ? new Date(lastSyncAt).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) : '--:--'}
-               </span>
-             </div>
-           </div>
+          <div className="flex items-center gap-1.5">
+            {!gps && (
+              <div className="bg-red-500/20 backdrop-blur-md px-2 py-1 rounded-lg border border-red-500/30 flex items-center gap-2 animate-pulse">
+                <div className="w-1.5 h-1.5 rounded-full bg-red-500" />
+                <span className="text-[7px] font-black text-red-200 uppercase tracking-widest">GPS SEARCHING</span>
+              </div>
+            )}
 
-           <div className="bg-black/30 backdrop-blur-md px-3 py-2 rounded-2xl border border-white/10 shadow-lg w-[220px]">
-             <div className="flex items-center justify-between">
-               <span className="text-[8px] font-black text-white/60 uppercase tracking-widest">Koordinat</span>
-               <span className="text-[8px] font-black uppercase tracking-widest text-blue-200">
-                 Grid {formState.spacingX}x{formState.spacingY}
-               </span>
-             </div>
-             <div className="mt-1 space-y-1">
-               <p className="text-[8px] text-white/70 font-bold">
-                 Current: {gps ? `${gps.lat.toFixed(6)}, ${gps.lon.toFixed(6)}` : '--'}
-               </p>
-               <p className="text-[8px] text-emerald-200 font-bold">
-                 {effectiveCoordinate
-                   ? `Capture: ${effectiveCoordinate.lat.toFixed(6)}, ${effectiveCoordinate.lon.toFixed(6)}`
-                   : 'Capture: --'}
-               </p>
-               <p className="text-[8px] text-white/60 font-bold">
-                 Anchor: {gridAnchor ? `${gridAnchor.lat.toFixed(6)}, ${gridAnchor.lon.toFixed(6)}` : '--'}
-               </p>
-               <p className="text-[8px] text-amber-200 font-bold">
-                 Accuracy*: {distanceFromAnchorM !== null ? `${distanceFromAnchorM.toFixed(1)} m` : '--'}
-               </p>
-             </div>
-             <div className="mt-2 flex gap-2">
-               <button
-                 onClick={onSetGridAnchor}
-                 className="flex-1 px-2 py-1 rounded-lg bg-blue-500/70 text-white text-[8px] font-black uppercase tracking-widest border border-blue-300/30"
-               >
-                 Set Awal
-               </button>
-               <button
-                 onClick={onClearGridAnchor}
-                 className="flex-1 px-2 py-1 rounded-lg bg-white/10 text-white/90 text-[8px] font-black uppercase tracking-widest border border-white/20"
-               >
-                 Reset
-               </button>
-             </div>
-             <p className="mt-1 text-[7px] text-white/40 leading-tight">
-               *Perbandingan jarak antara titik awal dan posisi GPS saat ini.
-             </p>
-           </div>
-           
-           {!gps && (
-             <div className="bg-red-500/20 backdrop-blur-md px-2 py-1 rounded-lg border border-red-500/30 flex items-center gap-2 animate-pulse">
-               <div className="w-1.5 h-1.5 rounded-full bg-red-500" />
-               <span className="text-[7px] font-black text-red-200 uppercase tracking-widest">GPS SEARCHING...</span>
-             </div>
-           )}
-
-           {livePlantHealth && (
-             <div className="bg-black/35 backdrop-blur-md px-2 py-1 rounded-lg border border-white/10 flex items-center gap-2">
-               <span
-                 className={`text-[7px] font-black uppercase tracking-widest ${
-                   livePlantHealth.health === 'Sehat'
-                     ? 'text-emerald-300'
-                     : livePlantHealth.health === 'Merana'
-                       ? 'text-amber-300'
-                       : 'text-red-300'
-                 }`}
-               >
-                 AI: {livePlantHealth.health}
-               </span>
-               <span className="text-[7px] font-bold text-white/70">{livePlantHealth.confidence}%</span>
-             </div>
-           )}
+            {livePlantHealth && (
+              <div className="bg-black/35 backdrop-blur-md px-2 py-1 rounded-lg border border-white/10 flex items-center gap-2">
+                <span
+                  className={`text-[7px] font-black uppercase tracking-widest ${
+                    livePlantHealth.health === 'Sehat'
+                      ? 'text-emerald-300'
+                      : livePlantHealth.health === 'Merana'
+                        ? 'text-amber-300'
+                        : 'text-red-300'
+                  }`}
+                >
+                  AI: {livePlantHealth.health}
+                </span>
+                <span className="text-[7px] font-bold text-white/70">{livePlantHealth.confidence}%</span>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 

@@ -41,6 +41,30 @@ interface GridAnchor {
   setAt: string;
 }
 
+const isFiniteCoord = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isFinite(value);
+
+const isValidLatLon = (lat: unknown, lon: unknown): boolean => {
+  if (!isFiniteCoord(lat) || !isFiniteCoord(lon)) {
+    return false;
+  }
+  return Math.abs(lat) <= 90 && Math.abs(lon) <= 180;
+};
+
+const isValidGpsLocation = (value: GpsLocation | null | undefined): value is GpsLocation => {
+  if (!value) {
+    return false;
+  }
+  return isValidLatLon(value.lat, value.lon) && isFiniteCoord(value.accuracy);
+};
+
+const isValidGridAnchor = (value: GridAnchor | null | undefined): value is GridAnchor => {
+  if (!value) {
+    return false;
+  }
+  return isValidLatLon(value.lat, value.lon);
+};
+
 const toRad = (value: number): number => (value * Math.PI) / 180;
 
 const calculateDistanceMeters = (
@@ -66,11 +90,22 @@ const snapCoordinateToGrid = (
   spacingX: number,
   spacingY: number,
 ) => {
+  if (!isValidLatLon(currentLat, currentLon) || !isValidGridAnchor(anchor)) {
+    return {
+      lat: currentLat,
+      lon: currentLon,
+      stepX: 0,
+      stepY: 0,
+    };
+  }
+
   const latScale = 111320;
   const lonScale = 111320 * Math.cos(toRad(anchor.lat));
   const safeLonScale = Math.max(1, Math.abs(lonScale));
-  const safeSpacingX = Math.max(1, spacingX);
-  const safeSpacingY = Math.max(1, spacingY);
+  const sx = Number(spacingX);
+  const sy = Number(spacingY);
+  const safeSpacingX = Number.isFinite(sx) && sx > 0 ? sx : 4;
+  const safeSpacingY = Number.isFinite(sy) && sy > 0 ? sy : 4;
 
   const deltaNorthM = (currentLat - anchor.lat) * latScale;
   const deltaEastM = (currentLon - anchor.lon) * safeLonScale;
@@ -140,6 +175,20 @@ const App: React.FC = () => {
   );
 
   useEffect(() => {
+    const sx = Number(formState.spacingX);
+    const sy = Number(formState.spacingY);
+    if (Number.isFinite(sx) && sx > 0 && Number.isFinite(sy) && sy > 0) {
+      return;
+    }
+
+    setFormState((prev) => ({
+      ...prev,
+      spacingX: Number.isFinite(sx) && sx > 0 ? sx : 4,
+      spacingY: Number.isFinite(sy) && sy > 0 ? sy : 4,
+    }));
+  }, [formState.spacingX, formState.spacingY, setFormState]);
+
+  useEffect(() => {
     const loadData = async () => {
       try {
         const data = await getAllEntries();
@@ -206,7 +255,11 @@ const App: React.FC = () => {
     let watchId: number;
     try {
       watchId = watchGpsLocation(
-        (location) => setGps(location),
+        (location) => {
+          if (isValidGpsLocation(location)) {
+            setGps(location);
+          }
+        },
         (error) => console.error("GPS Error:", error)
       );
     } catch (e) {
@@ -216,6 +269,18 @@ const App: React.FC = () => {
       if (watchId !== undefined) navigator.geolocation.clearWatch(watchId);
     };
   }, []);
+
+  useEffect(() => {
+    if (!gridAnchor) {
+      return;
+    }
+    if (isValidGridAnchor(gridAnchor)) {
+      return;
+    }
+
+    setGridAnchor(null);
+    showToast('Titik awal grid tidak valid, otomatis direset.', 'info');
+  }, [gridAnchor, setGridAnchor, showToast]);
 
   const syncPendingEntries = useCallback(async (options?: { background?: boolean }) => {
     const isBackground = options?.background ?? false;
@@ -338,25 +403,25 @@ const App: React.FC = () => {
   }, [isOnline, syncPendingEntries]);
 
   const liveCoordinate = useMemo(() => {
-    if (!gps) {
+    if (!isValidGpsLocation(gps)) {
       return null;
     }
-    if (!gridAnchor) {
-      return { lat: gps.lat, lon: gps.lon, snapped: false };
+    if (!isValidGridAnchor(gridAnchor)) {
+      return { lat: gps.lat, lon: gps.lon, snapped: false, stepX: 0, stepY: 0 };
     }
     const snapped = snapCoordinateToGrid(gps.lat, gps.lon, gridAnchor, formState.spacingX, formState.spacingY);
-    return { lat: snapped.lat, lon: snapped.lon, snapped: true };
+    return { lat: snapped.lat, lon: snapped.lon, snapped: true, stepX: snapped.stepX, stepY: snapped.stepY };
   }, [gps, gridAnchor, formState.spacingX, formState.spacingY]);
 
   const distanceFromAnchorM = useMemo(() => {
-    if (!gps || !gridAnchor) {
+    if (!isValidGpsLocation(gps) || !isValidGridAnchor(gridAnchor)) {
       return null;
     }
     return calculateDistanceMeters(gridAnchor.lat, gridAnchor.lon, gps.lat, gps.lon);
   }, [gps, gridAnchor]);
 
   const handleSetGridAnchor = useCallback(() => {
-    if (!gps) {
+    if (!isValidGpsLocation(gps)) {
       showToast('GPS belum tersedia. Tidak bisa set titik awal.', 'error');
       return;
     }
@@ -411,23 +476,25 @@ const App: React.FC = () => {
       }
     }
 
-    const rawLat = gps ? gps.lat : 0;
-    const rawLon = gps ? gps.lon : 0;
-    const snappedCoordinate = gps && gridAnchor
-      ? snapCoordinateToGrid(rawLat, rawLon, gridAnchor, formState.spacingX, formState.spacingY)
+    const hasValidGps = isValidGpsLocation(gps);
+    const rawLat = hasValidGps ? gps.lat : 0;
+    const rawLon = hasValidGps ? gps.lon : 0;
+    const anchorForCapture = hasValidGps && isValidGridAnchor(gridAnchor) ? gridAnchor : null;
+    const snappedCoordinate = hasValidGps && anchorForCapture
+      ? snapCoordinateToGrid(rawLat, rawLon, anchorForCapture, formState.spacingX, formState.spacingY)
       : null;
     const lat = snappedCoordinate ? snappedCoordinate.lat : rawLat;
     const lon = snappedCoordinate ? snappedCoordinate.lon : rawLon;
-    const gpsQualityAtCapture = classifyGpsQualityAtCapture(gps);
-    const distanceToAnchor = gps && gridAnchor
-      ? calculateDistanceMeters(gridAnchor.lat, gridAnchor.lon, rawLat, rawLon)
+    const gpsQualityAtCapture = classifyGpsQualityAtCapture(hasValidGps ? gps : null);
+    const distanceToAnchor = hasValidGps && anchorForCapture
+      ? calculateDistanceMeters(anchorForCapture.lat, anchorForCapture.lon, rawLat, rawLon)
       : undefined;
 
     const newEntryMeta: Omit<PlantEntry, 'foto'> = {
       id,
       tanggal: timestamp.toLocaleString('id-ID'),
       timestamp: timestamp.toISOString(),
-      gps: gps || undefined,
+      gps: hasValidGps ? gps : undefined,
       lokasi: `${lat.toFixed(6)},${lon.toFixed(6)}`,
       pekerjaan: formState.pekerjaan,
       tinggi: formState.tinggi,
@@ -441,9 +508,11 @@ const App: React.FC = () => {
       tim: formState.tim,
       kesehatan: formState.kesehatan,
       gpsQualityAtCapture,
-      gpsAccuracyAtCapture: gps?.accuracy,
+      gpsAccuracyAtCapture: hasValidGps ? gps.accuracy : undefined,
       rawKoordinat: `${rawLat.toFixed(6)},${rawLon.toFixed(6)}`,
-      gridAnchorKoordinat: gridAnchor ? `${gridAnchor.lat.toFixed(6)},${gridAnchor.lon.toFixed(6)}` : undefined,
+      gridAnchorKoordinat: anchorForCapture
+        ? `${anchorForCapture.lat.toFixed(6)},${anchorForCapture.lon.toFixed(6)}`
+        : undefined,
       distanceFromAnchorM: distanceToAnchor,
       snappedToGrid: Boolean(snappedCoordinate),
       noPohon: entries.length + 1,

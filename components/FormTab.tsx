@@ -10,9 +10,30 @@ interface FormTabProps {
 export const FormTab: React.FC<FormTabProps> = ({ formState, onFormStateChange }) => {
   const handleFormChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
+    if (e.target.type === 'number') {
+      const parsed = Number(value);
+      onFormStateChange((prev) => {
+        if (!Number.isFinite(parsed)) {
+          if (name === 'spacingX') {
+            return { ...prev, spacingX: 4 };
+          }
+          if (name === 'spacingY') {
+            return { ...prev, spacingY: 4 };
+          }
+          return prev;
+        }
+
+        return {
+          ...prev,
+          [name]: parsed,
+        };
+      });
+      return;
+    }
+
     onFormStateChange((prev) => ({
       ...prev,
-      [name]: e.target.type === 'number' ? (value === '' ? '' : Number(value)) : value,
+      [name]: value,
     }));
   };
 

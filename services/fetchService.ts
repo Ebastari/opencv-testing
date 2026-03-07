@@ -3,6 +3,16 @@ export interface CloudFetchResult {
   data: any[];
   source: 'network' | 'cache';
   cachedAt?: string;
+  total?: number;
+  limit?: number;
+  offset?: number;
+  order?: 'asc' | 'desc';
+}
+
+export interface CloudFetchOptions {
+  limit?: number;
+  offset?: number;
+  order?: 'asc' | 'desc';
 }
 
 interface CloudCachePayload {
@@ -124,7 +134,34 @@ const writeCloudCache = (url: string, data: any[]): void => {
   }
 };
 
-export const fetchCloudDataSmart = async (url: string): Promise<CloudFetchResult> => {
+const withQueryParams = (url: string, options?: CloudFetchOptions): string => {
+  if (!options) {
+    return url;
+  }
+
+  const safeUrl = url.trim();
+  if (!safeUrl) {
+    return safeUrl;
+  }
+
+  try {
+    const parsed = new URL(safeUrl);
+    if (options.limit && options.limit > 0) {
+      parsed.searchParams.set('limit', String(options.limit));
+    }
+    if (options.offset && options.offset > 0) {
+      parsed.searchParams.set('offset', String(options.offset));
+    }
+    if (options.order) {
+      parsed.searchParams.set('order', options.order);
+    }
+    return parsed.toString();
+  } catch {
+    return safeUrl;
+  }
+};
+
+export const fetchCloudDataSmart = async (url: string, options?: CloudFetchOptions): Promise<CloudFetchResult> => {
   // Jangan mencoba melakukan fetch jika URL masih berupa placeholder atau kosong.
   if (!url || url === '' || url.includes('/s/.../exec')) {
     const cached = readCloudCache(url || 'unknown');
@@ -136,7 +173,8 @@ export const fetchCloudDataSmart = async (url: string): Promise<CloudFetchResult
   }
 
   try {
-    const response = await fetch(url, {
+    const requestUrl = withQueryParams(url, options);
+    const response = await fetch(requestUrl, {
       cache: 'no-store',
     });
     if (!response.ok) {
@@ -151,6 +189,10 @@ export const fetchCloudDataSmart = async (url: string): Promise<CloudFetchResult
       return {
         data: rows,
         source: 'network',
+        total: typeof result?.total === 'number' ? result.total : rows.length,
+        limit: typeof result?.limit === 'number' ? result.limit : options?.limit,
+        offset: typeof result?.offset === 'number' ? result.offset : options?.offset,
+        order: result?.order === 'asc' ? 'asc' : 'desc',
       };
     }
 

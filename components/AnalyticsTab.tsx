@@ -10,21 +10,30 @@ interface AnalyticsTabProps {
   isOnline: boolean;
 }
 
+const CLOUD_FETCH_LIMIT = 1200;
+const MAX_RENDERED_POINTS = 1500;
+
 export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({ entries, appsScriptUrl, isOnline }) => {
   const [cloudData, setCloudData] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [cloudSource, setCloudSource] = useState<'network' | 'cache'>('network');
   const [cachedAt, setCachedAt] = useState<string | null>(null);
+  const [cloudTotal, setCloudTotal] = useState<number | null>(null);
 
   const loadCloudData = async () => {
     if (!appsScriptUrl || appsScriptUrl.includes('/s/.../exec')) return;
 
     setLoading(true);
     try {
-      const result = await fetchCloudDataSmart(appsScriptUrl);
+      const result = await fetchCloudDataSmart(appsScriptUrl, {
+        limit: CLOUD_FETCH_LIMIT,
+        offset: 0,
+        order: 'desc',
+      });
       setCloudData(Array.isArray(result.data) ? result.data : []);
       setCloudSource(result.source);
       setCachedAt(result.cachedAt || null);
+      setCloudTotal(typeof result.total === 'number' ? result.total : null);
     } catch (err) {
       console.error("Gagal sinkronisasi analitik cloud:", err);
     } finally {
@@ -167,7 +176,11 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({ entries, appsScriptU
       map.set(String(entry.id), entry);
     });
 
-    return Array.from(map.values()) as PlantEntry[];
+    const merged = Array.from(map.values()) as PlantEntry[];
+    if (merged.length <= MAX_RENDERED_POINTS) {
+      return merged;
+    }
+    return merged.slice(merged.length - MAX_RENDERED_POINTS);
   }, [cloudData, entries]);
 
   return (
@@ -178,6 +191,11 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({ entries, appsScriptU
           <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">
             {loading ? 'Menyinkronkan Cloud...' : `Total Terdeteksi: ${mergedData.length} Titik`}
           </span>
+          {!loading && cloudTotal !== null && (
+            <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest bg-slate-100 px-2 py-1 rounded-full">
+              CLOUD: {cloudTotal}
+            </span>
+          )}
           {!loading && cloudSource === 'cache' && (
             <span className="text-[8px] font-black text-amber-600 uppercase tracking-widest bg-amber-50 px-2 py-1 rounded-full">
               CACHE OFFLINE
@@ -196,6 +214,14 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({ entries, appsScriptU
         <div className="px-1">
           <p className="text-[9px] font-bold text-amber-700 bg-amber-50 border border-amber-100 rounded-xl px-3 py-2">
             Menampilkan cache cloud terakhir ({new Date(cachedAt).toLocaleString('id-ID')}).
+          </p>
+        </div>
+      )}
+
+      {!loading && cloudSource === 'network' && cloudTotal !== null && cloudTotal > mergedData.length && (
+        <div className="px-1">
+          <p className="text-[9px] font-bold text-blue-700 bg-blue-50 border border-blue-100 rounded-xl px-3 py-2">
+            Performa aktif: menampilkan {mergedData.length} titik terbaru dari {cloudTotal} data cloud.
           </p>
         </div>
       )}

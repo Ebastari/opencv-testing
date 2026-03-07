@@ -44,8 +44,23 @@ function doGet(e) {
       return jsonResponse_(buildAnalysis_(sheet));
     }
 
+    const limit = Math.max(0, Number(getParam_(e, 'limit', '0')) || 0);
+    const offset = Math.max(0, Number(getParam_(e, 'offset', '0')) || 0);
+    const order = String(getParam_(e, 'order', 'desc')).toLowerCase() === 'asc' ? 'asc' : 'desc';
+
+    if (limit > 0) {
+      return jsonResponse_(readSheetAsObjectsPaged_(sheet, limit, offset, order));
+    }
+
     const data = readSheetAsObjects_(sheet);
-    return jsonResponse_(data);
+    return jsonResponse_({
+      status: 'success',
+      data: data,
+      total: data.length,
+      limit: 0,
+      offset: 0,
+      order: 'asc',
+    });
   } catch (error) {
     return jsonResponse_({ status: 'error', message: String(error) });
   }
@@ -157,6 +172,74 @@ function readSheetAsObjects_(sheet) {
   });
 }
 
+function readSheetAsObjectsPaged_(sheet, limit, offset, order) {
+  const lastRow = sheet.getLastRow();
+  const lastCol = sheet.getLastColumn();
+
+  if (lastRow <= 1 || lastCol <= 0) {
+    return {
+      status: 'success',
+      data: [],
+      total: 0,
+      limit: limit,
+      offset: offset,
+      order: order,
+    };
+  }
+
+  const headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0].map((h) => String(h || '').trim());
+  const totalDataRows = lastRow - 1;
+
+  let startRow = 2;
+  let endRow = 1;
+
+  if (order === 'desc') {
+    endRow = lastRow - offset;
+    startRow = Math.max(2, endRow - limit + 1);
+  } else {
+    startRow = 2 + offset;
+    endRow = Math.min(lastRow, startRow + limit - 1);
+  }
+
+  if (endRow < startRow || endRow < 2 || startRow > lastRow) {
+    return {
+      status: 'success',
+      data: [],
+      total: totalDataRows,
+      limit: limit,
+      offset: offset,
+      order: order,
+    };
+  }
+
+  const rowCount = endRow - startRow + 1;
+  const rows = sheet.getRange(startRow, 1, rowCount, lastCol).getValues();
+  if (order === 'desc') {
+    rows.reverse();
+  }
+
+  const data = rows.map(function (row) {
+    const obj = {};
+    for (var i = 0; i < headers.length; i++) {
+      var value = row[i];
+      if (value instanceof Date) {
+        value = Utilities.formatDate(value, Session.getScriptTimeZone(), 'dd/MM/yyyy HH:mm:ss');
+      }
+      obj[headers[i]] = value;
+    }
+    return obj;
+  });
+
+  return {
+    status: 'success',
+    data: data,
+    total: totalDataRows,
+    limit: limit,
+    offset: offset,
+    order: order,
+  };
+}
+
 function appendMonitoringRow_(sheet, payload) {
   const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map((h) => String(h || '').trim());
   const headerIndex = buildHeaderIndex_(headers);
@@ -172,8 +255,10 @@ function appendMonitoringRow_(sheet, payload) {
   const kesehatan = normalizeHealth_(payload.Kesehatan || payload.kesehatan || 'Sehat');
 
   const coords = resolveCoordinates_(payload);
-  const lokasi = String(payload.Lokasi || payload.lokasi || coords.text).trim();
-  const koordinat = String(payload.Koordinat || payload.koordinat || coords.text).trim();
+  const lokasiRaw = String(payload.Lokasi || payload.lokasi || coords.text).trim();
+  const koordinatRaw = String(payload.Koordinat || payload.koordinat || coords.text).trim();
+  const lokasi = lokasiRaw.toLowerCase().includes('nan') ? coords.text : lokasiRaw;
+  const koordinat = koordinatRaw.toLowerCase().includes('nan') ? coords.text : koordinatRaw;
 
   // Y dipertahankan sebagai longitude, X sebagai latitude agar kompatibel data lama aplikasi.
   const y = payload.Y !== undefined ? payload.Y : coords.lon;
