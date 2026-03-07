@@ -105,6 +105,24 @@ export const OnlineDashboardTab: React.FC<OnlineDashboardTabProps> = ({ appsScri
     });
   }, [ecologyMetrics]);
 
+  const buildLocalSummary = (): string => {
+    const { total, sehat, merana, mati, persenSehat, rataTinggi, jenisTop } = ecologyMetrics;
+    const topJenis = jenisTop[0]?.name || 'Unknown';
+
+    if (total === 0) {
+      return 'Belum ada data cloud untuk dianalisis.';
+    }
+
+    const statusUtama =
+      persenSehat >= 80
+        ? 'kondisi ekologi relatif stabil'
+        : persenSehat >= 60
+          ? 'kondisi ekologi cukup baik namun perlu penguatan'
+          : 'kondisi ekologi perlu perhatian prioritas';
+
+    return `Dari ${total} pohon, ${sehat} sehat (${persenSehat}%), ${merana} merana, dan ${mati} mati dengan rata-rata tinggi ${rataTinggi} cm, didominasi jenis ${topJenis}; ${statusUtama}. Prioritaskan pemeliharaan pada titik merana/mati dan evaluasi penyebab lokal secara berkala.`;
+  };
+
   const requestAiSummary = async () => {
     if (ecologyMetrics.total === 0) {
       setAiSummary('Belum ada data cloud untuk dianalisis.');
@@ -123,14 +141,31 @@ export const OnlineDashboardTab: React.FC<OnlineDashboardTabProps> = ({ appsScri
         body: JSON.stringify({ metrics: ecologyMetrics }),
       });
 
-      const result = await response.json();
+      const contentType = response.headers.get('content-type') || '';
+      const raw = await response.text();
+
+      if (!contentType.toLowerCase().includes('application/json')) {
+        // Umumnya terjadi jika endpoint /api tidak tersedia dan server mengembalikan HTML 404.
+        throw new Error('Endpoint AI tidak tersedia di environment ini.');
+      }
+
+      let result: any = {};
+      try {
+        result = raw ? JSON.parse(raw) : {};
+      } catch {
+        throw new Error('Respons AI tidak valid (bukan JSON).');
+      }
+
       if (!response.ok) {
         throw new Error(result?.error || 'Gagal membuat analisis ekologi.');
       }
 
       setAiSummary(result?.summary || 'Analisis tersedia, tetapi respons kosong.');
     } catch (err: any) {
-      setAnalysisError(err?.message || 'Gagal membuat analisis ekologi.');
+      setAiSummary(buildLocalSummary());
+      setAnalysisError(
+        `${err?.message || 'Gagal membuat analisis ekologi.'} Menampilkan analisis lokal sebagai fallback.`,
+      );
     } finally {
       setIsAnalyzing(false);
     }
