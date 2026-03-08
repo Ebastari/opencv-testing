@@ -212,12 +212,15 @@ export const CameraView: React.FC<CameraViewProps> = ({
       shutterSoundRef.current.play().catch(() => {});
     }
     
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
+    // Downscale ke max 1920px agar tidak OOM di mobile Chrome.
+    const MAX_CAPTURE = 1920;
+    const scale = Math.min(1, MAX_CAPTURE / Math.max(video.videoWidth, video.videoHeight));
+    canvas.width = Math.round(video.videoWidth * scale);
+    canvas.height = Math.round(video.videoHeight * scale);
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     
-    // Draw frame video asli
+    // Draw frame video yang sudah di-scale
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
     // Overlay Watermark
@@ -264,6 +267,15 @@ export const CameraView: React.FC<CameraViewProps> = ({
       analysisCanvasRef.current = document.createElement('canvas');
     }
 
+    // Set ukuran canvas sekali di luar loop agar tidak re-alloc GPU buffer tiap tick.
+    const ANALYSIS_SIZE = 160;
+    const canvas = analysisCanvasRef.current;
+    if (canvas.width !== ANALYSIS_SIZE || canvas.height !== ANALYSIS_SIZE) {
+      canvas.width = ANALYSIS_SIZE;
+      canvas.height = ANALYSIS_SIZE;
+    }
+    const context = canvas.getContext('2d', { willReadFrequently: true });
+
     const tick = () => {
       const v = videoRef.current;
       if (!v || v.videoWidth === 0 || v.videoHeight === 0 || v.readyState < 2) {
@@ -271,20 +283,15 @@ export const CameraView: React.FC<CameraViewProps> = ({
       }
 
       try {
-        const canvas = analysisCanvasRef.current as HTMLCanvasElement;
-        const context = canvas.getContext('2d', { willReadFrequently: true });
         if (!context) {
           return;
         }
 
-        const size = 160;
-        canvas.width = size;
-        canvas.height = size;
         const side = Math.min(v.videoWidth, v.videoHeight);
         const sx = Math.max(0, (v.videoWidth - side) / 2);
         const sy = Math.max(0, (v.videoHeight - side) / 2);
-        context.drawImage(v, sx, sy, side, side, 0, 0, size, size);
-        const imageData = context.getImageData(0, 0, size, size);
+        context.drawImage(v, sx, sy, side, side, 0, 0, ANALYSIS_SIZE, ANALYSIS_SIZE);
+        const imageData = context.getImageData(0, 0, ANALYSIS_SIZE, ANALYSIS_SIZE);
         const result = analyzePlantHealthHSV(imageData, { centerFocus: true });
         setLivePlantHealth(result);
       } catch {
@@ -298,6 +305,12 @@ export const CameraView: React.FC<CameraViewProps> = ({
     return () => {
       if (timerId !== null) {
         window.clearInterval(timerId);
+      }
+      // Lepas canvas dari GPU/RAM untuk mencegah memory leak.
+      if (analysisCanvasRef.current) {
+        analysisCanvasRef.current.width = 0;
+        analysisCanvasRef.current.height = 0;
+        analysisCanvasRef.current = null;
       }
     };
   }, [cameraLoading, cameraError, needsUserAction, currentDeviceId]);
@@ -429,11 +442,30 @@ export const CameraView: React.FC<CameraViewProps> = ({
             </div>
           </div>
 
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-1.5 flex-wrap justify-end">
             {!gps && (
               <div className="bg-red-500/10 backdrop-blur-sm px-2 py-1 rounded-lg border border-red-500/15 flex items-center gap-2 animate-pulse">
                 <div className="w-1.5 h-1.5 rounded-full bg-red-500" />
                 <span className="text-[7px] font-black text-red-200 uppercase tracking-widest">GPS SEARCHING</span>
+              </div>
+            )}
+
+            {gps && Number.isFinite(gps.accuracy) && (
+              <div className={`backdrop-blur-sm px-2 py-1 rounded-lg border flex items-center gap-1.5 ${
+                gps.accuracy < 5
+                  ? 'bg-emerald-500/10 border-emerald-500/15'
+                  : gps.accuracy <= 10
+                    ? 'bg-amber-500/10 border-amber-500/15'
+                    : 'bg-red-500/10 border-red-500/15'
+              }`}>
+                <div className={`w-1.5 h-1.5 rounded-full ${
+                  gps.accuracy < 5 ? 'bg-emerald-400' : gps.accuracy <= 10 ? 'bg-amber-400' : 'bg-red-400'
+                }`} />
+                <span className={`text-[7px] font-black uppercase tracking-widest ${
+                  gps.accuracy < 5 ? 'text-emerald-200' : gps.accuracy <= 10 ? 'text-amber-200' : 'text-red-200'
+                }`}>
+                  GPS ±{gps.accuracy < 10 ? gps.accuracy.toFixed(1) : Math.round(gps.accuracy)}m
+                </span>
               </div>
             )}
 

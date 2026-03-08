@@ -21,6 +21,18 @@ self.addEventListener('activate', (event) => {
   );
 });
 
+const RUNTIME_CACHE_LIMIT = 80;
+const trimCache = async (cacheName, maxItems) => {
+  const cache = await caches.open(cacheName);
+  const keys = await cache.keys();
+  if (keys.length > maxItems) {
+    await cache.delete(keys[0]);
+    if (keys.length - 1 > maxItems) {
+      await trimCache(cacheName, maxItems);
+    }
+  }
+};
+
 const isStaticAssetRequest = (request) => {
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) {
@@ -63,7 +75,10 @@ self.addEventListener('fetch', (event) => {
         const fetchPromise = fetch(request)
           .then((response) => {
             const copy = response.clone();
-            caches.open(RUNTIME_CACHE).then((cache) => cache.put(request, copy));
+            caches.open(RUNTIME_CACHE).then((cache) => {
+              cache.put(request, copy);
+              trimCache(RUNTIME_CACHE, RUNTIME_CACHE_LIMIT);
+            });
             return response;
           })
           .catch(() => cached);

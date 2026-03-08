@@ -87,8 +87,13 @@ export const analyzePlantHealthHSV = (
   let selectedSatSum = 0;
   let selectedValSum = 0;
 
-  // Batasi analisis ke piksel yang cukup berwarna agar hasil kesehatan lebih stabil.
-  const candidateHues: number[] = [];
+  // Running circular statistics — O(1) memory, tidak perlu array hue individual.
+  const DEG2RAD = Math.PI / 180;
+  let sinSum = 0;
+  let cosSum = 0;
+  let classSehat = 0;
+  let classMerana = 0;
+  let classMati = 0;
   const bins = new Array<number>(36).fill(0);
 
   for (let i = 0; i < pixels.length; i += step) {
@@ -118,11 +123,16 @@ export const analyzePlantHealthHSV = (
 
     // Kandidat vegetasi: cukup jenuh, cukup terang, dan berada di spektrum hijau-kuning tanaman.
     if (s >= 0.2 && v >= 0.15 && h >= 25 && h <= 170) {
-      candidateHues.push(h);
+      sinSum += Math.sin(h * DEG2RAD);
+      cosSum += Math.cos(h * DEG2RAD);
       bins[Math.min(35, Math.floor(h / 10))] += 1;
       selectedCount += 1;
       selectedSatSum += s;
       selectedValSum += v;
+      const cls = classifyHealthByHue(h);
+      if (cls === 'Sehat') classSehat += 1;
+      else if (cls === 'Merana') classMerana += 1;
+      else classMati += 1;
     }
   }
 
@@ -136,17 +146,30 @@ export const analyzePlantHealthHSV = (
     };
   }
 
-  const sourceHues = candidateHues.length > 0 ? candidateHues : [hueSum / count];
-  const hue = sourceHues.reduce((acc, cur) => acc + cur, 0) / sourceHues.length;
+  // Circular mean via atan2 — menghindari artefak rata-rata linear pada data angular.
+  let hue: number;
+  if (selectedCount > 0) {
+    hue = Math.atan2(sinSum / selectedCount, cosSum / selectedCount) / DEG2RAD;
+    if (hue < 0) hue += 360;
+  } else {
+    hue = hueSum / count;
+  }
+
   const saturation = selectedCount > 0 ? selectedSatSum / selectedCount : satSum / count;
   const value = selectedCount > 0 ? selectedValSum / selectedCount : valSum / count;
   const health = classifyHealthByHue(hue);
 
-  const inClassCount = sourceHues.filter((h) => classifyHealthByHue(h) === health).length;
-  const classConsistency = inClassCount / sourceHues.length;
-  const dominantBin = bins.length > 0 ? Math.max(...bins) : 0;
-  const concentration = candidateHues.length > 0 ? dominantBin / candidateHues.length : 0;
-  const confidence = round(Math.max(0, Math.min(1, (classConsistency + concentration) / 2)) * 100);
+  // Confidence dari running class counts — tanpa alokasi array tambahan.
+  const inClassCount = health === 'Sehat' ? classSehat : health === 'Merana' ? classMerana : classMati;
+  const totalClassified = selectedCount > 0 ? selectedCount : 1;
+  const classConsistency = inClassCount / totalClassified;
+  const dominantBin = Math.max(...bins);
+  const concentration = selectedCount > 0 ? dominantBin / selectedCount : 0;
+
+  // Penalti confidence jika piksel vegetasi terlalu sedikit relatif terhadap ROI.
+  const vegRatio = count > 0 ? selectedCount / count : 0;
+  const vegPenalty = vegRatio < 0.01 ? 0.3 : vegRatio < 0.05 ? 0.7 : 1;
+  const confidence = round(Math.max(0, Math.min(1, (classConsistency + concentration) / 2 * vegPenalty)) * 100);
 
   return {
     hue: round(hue),

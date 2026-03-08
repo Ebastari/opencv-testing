@@ -136,12 +136,19 @@ const loadImageDataFromSrc = async (src: string, size = 128): Promise<ImageData 
         canvas.height = size;
         const context = canvas.getContext('2d', { willReadFrequently: true });
         if (!context) {
+          canvas.width = 0;
+          canvas.height = 0;
           resolve(null);
           return;
         }
 
         context.drawImage(image, 0, 0, size, size);
-        resolve(context.getImageData(0, 0, size, size));
+        const data = context.getImageData(0, 0, size, size);
+        // Lepas canvas segera setelah ImageData diambil.
+        canvas.width = 0;
+        canvas.height = 0;
+        image.src = '';
+        resolve(data);
       } catch {
         resolve(null);
       }
