@@ -1,17 +1,64 @@
 
 import React from 'react';
-import { PlantEntry } from '../types';
+import { getAllEntries } from '../services/dbService';
 import { exportToCSV, exportToZIP, exportToKMZ } from '../services/exportService';
 
 interface SettingsTabProps {
   appsScriptUrl: string;
   onAppsScriptUrlChange: (url: string) => void;
-  entries: PlantEntry[];
   onClearData: () => void;
 }
 
-export const SettingsTab: React.FC<SettingsTabProps> = ({ appsScriptUrl, onAppsScriptUrlChange, entries, onClearData }) => {
+export const SettingsTab: React.FC<SettingsTabProps> = ({ appsScriptUrl, onAppsScriptUrlChange, onClearData }) => {
   const isSecure = window.isSecureContext;
+  const [exportState, setExportState] = React.useState<{
+    mode: 'csv' | 'kmz' | 'zip' | null;
+    current: number;
+    total: number;
+    phase: 'preparing' | 'packaging' | 'saving' | null;
+  }>({
+    mode: null,
+    current: 0,
+    total: 0,
+    phase: null,
+  });
+
+  const handleExport = async (mode: 'csv' | 'kmz' | 'zip') => {
+    const entries = await getAllEntries();
+    setExportState({ mode, current: 0, total: entries.length, phase: 'preparing' });
+    try {
+      if (mode === 'csv') {
+        exportToCSV(entries);
+        return;
+      }
+      if (mode === 'kmz') {
+        await exportToKMZ(entries, {
+          onProgress: (progress) => {
+            setExportState({ mode, ...progress });
+          },
+        });
+        return;
+      }
+      await exportToZIP(entries, {
+        onProgress: (progress) => {
+          setExportState({ mode, ...progress });
+        },
+      });
+    } finally {
+      window.setTimeout(() => {
+        setExportState({ mode: null, current: 0, total: 0, phase: null });
+      }, 800);
+    }
+  };
+
+  const exportLabel =
+    exportState.phase === 'preparing'
+      ? 'Menyiapkan file bertahap...'
+      : exportState.phase === 'packaging'
+        ? 'Membungkus arsip...'
+        : exportState.phase === 'saving'
+          ? 'Menyimpan file...'
+          : '';
 
   return (
     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-2 duration-300">
@@ -37,14 +84,33 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({ appsScriptUrl, onAppsS
           <div className="w-2 h-2 rounded-full bg-emerald-500" />
           <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Ekspor Massal</h4>
         </div>
+        {exportState.mode && (
+          <div className="bg-emerald-50 border border-emerald-100 rounded-2xl px-4 py-3 space-y-2">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-[10px] font-black text-emerald-700 uppercase tracking-wider">
+                {exportState.mode.toUpperCase()} EXPORT
+              </p>
+              <p className="text-[10px] font-black text-emerald-700">
+                {exportState.total > 0 ? `${Math.min(exportState.current, exportState.total)}/${exportState.total}` : '--'}
+              </p>
+            </div>
+            <p className="text-[10px] font-bold text-emerald-700">{exportLabel}</p>
+            <div className="h-2 rounded-full bg-emerald-100 overflow-hidden">
+              <div
+                className="h-full bg-emerald-500 transition-all duration-200"
+                style={{ width: `${exportState.total > 0 ? (Math.min(exportState.current, exportState.total) / exportState.total) * 100 : 15}%` }}
+              />
+            </div>
+          </div>
+        )}
         <div className="grid grid-cols-1 gap-3">
-          <button onClick={() => exportToCSV(entries)} className="w-full p-5 bg-white border border-slate-100 rounded-3xl text-xs font-black text-slate-700 active:scale-[0.98] transition-all flex justify-between items-center shadow-sm hover:border-blue-200 hover:shadow-md">
+          <button onClick={() => void handleExport('csv')} disabled={Boolean(exportState.mode)} className="w-full p-5 bg-white border border-slate-100 rounded-3xl text-xs font-black text-slate-700 active:scale-[0.98] transition-all flex justify-between items-center shadow-sm hover:border-blue-200 hover:shadow-md disabled:opacity-50 disabled:cursor-not-allowed">
             EXPORT CSV <span className="text-xl">📊</span>
           </button>
-          <button onClick={() => exportToKMZ(entries)} className="w-full p-5 bg-white border border-slate-100 rounded-3xl text-xs font-black text-slate-700 active:scale-[0.98] transition-all flex justify-between items-center shadow-sm hover:border-emerald-200 hover:shadow-md">
+          <button onClick={() => void handleExport('kmz')} disabled={Boolean(exportState.mode)} className="w-full p-5 bg-white border border-slate-100 rounded-3xl text-xs font-black text-slate-700 active:scale-[0.98] transition-all flex justify-between items-center shadow-sm hover:border-emerald-200 hover:shadow-md disabled:opacity-50 disabled:cursor-not-allowed">
             EXPORT KMZ (GOOGLE EARTH) <span className="text-xl">🌍</span>
           </button>
-          <button onClick={() => exportToZIP(entries)} className="w-full p-5 bg-white border border-slate-100 rounded-3xl text-xs font-black text-slate-700 active:scale-[0.98] transition-all flex justify-between items-center shadow-sm hover:border-orange-200 hover:shadow-md">
+          <button onClick={() => void handleExport('zip')} disabled={Boolean(exportState.mode)} className="w-full p-5 bg-white border border-slate-100 rounded-3xl text-xs font-black text-slate-700 active:scale-[0.98] transition-all flex justify-between items-center shadow-sm hover:border-orange-200 hover:shadow-md disabled:opacity-50 disabled:cursor-not-allowed">
             DOWNLOAD IMAGE PACK (.ZIP) <span className="text-xl">📦</span>
           </button>
         </div>

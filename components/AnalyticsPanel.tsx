@@ -20,6 +20,7 @@ import {
   getCachedPhotoEcologyAnalyses,
   type CachedPhotoEcologyAnalysis,
 } from '../services/ecologyCacheService';
+import { getEntryById } from '../services/dbService';
 import { estimateBiomass } from '../ecology/biomass';
 import { estimateCarbon } from '../ecology/carbon';
 import { calculateNDVI } from '../ecology/ndvi';
@@ -120,6 +121,23 @@ const getHighResImageUrl = (url: string): string => {
   }
 
   return url;
+};
+
+const isPreviewEntry = (entry: PlantEntry): boolean => {
+  return Boolean(entry.thumbnail && entry.foto === entry.thumbnail);
+};
+
+const resolvePhotoSource = async (entry: PlantEntry): Promise<string> => {
+  if (!entry.id) {
+    return getHighResImageUrl(entry.linkDrive || entry.foto || '');
+  }
+
+  if (!isPreviewEntry(entry)) {
+    return getHighResImageUrl(entry.linkDrive || entry.foto || '');
+  }
+
+  const fullEntry = await getEntryById(entry.id);
+  return getHighResImageUrl(fullEntry?.linkDrive || fullEntry?.foto || entry.linkDrive || entry.foto || '');
 };
 
 const loadImageDataFromSrc = async (src: string, size = 128): Promise<ImageData | null> => {
@@ -247,9 +265,10 @@ const MapAutoFit = ({ points }: { points: [number, number][] }) => {
   return null;
 };
 
-export const AnalyticsPanel: React.FC<{ entries: PlantEntry[]; appsScriptUrl: string }> = ({
+export const AnalyticsPanel: React.FC<{ entries: PlantEntry[]; appsScriptUrl?: string; useCloudSummary?: boolean }> = ({
   entries,
-  appsScriptUrl,
+  appsScriptUrl = '',
+  useCloudSummary = true,
 }) => {
   const [isLeafletReady, setIsLeafletReady] = useState(false);
   const [isImageAnalysisRunning, setIsImageAnalysisRunning] = useState(false);
@@ -264,9 +283,15 @@ export const AnalyticsPanel: React.FC<{ entries: PlantEntry[]; appsScriptUrl: st
     failed: 0,
   });
   const [photoMetricsById, setPhotoMetricsById] = useState<Record<string, PhotoEcologyMetric>>({});
+  const [popupImageById, setPopupImageById] = useState<Record<string, string>>({});
+  const [popupLoadingById, setPopupLoadingById] = useState<Record<string, boolean>>({});
 
   const analyzableEntries = useMemo(() => {
     return entries.filter((entry) => Boolean(entry.id && entry.foto));
+  }, [entries]);
+
+  const mapEntries = useMemo(() => {
+    return entries.filter((entry) => entry.gps && entry.gps.lat !== 0 && entry.gps.lon !== 0);
   }, [entries]);
 
   const runBatchAnalysis = useCallback(
@@ -304,10 +329,11 @@ export const AnalyticsPanel: React.FC<{ entries: PlantEntry[]; appsScriptUrl: st
             continue;
           }
 
-          const result = await analyzePhotoEcology(entry.foto);
+          const source = await resolvePhotoSource(entry);
+          const result = await analyzePhotoEcology(source);
           if (result) {
             computedMap[entry.id] = result;
-            updates.push(toCacheRecord(entry.id, entry.foto, result));
+            updates.push(toCacheRecord(entry.id, source, result));
           } else {
             failed += 1;
           }
@@ -347,6 +373,13 @@ export const AnalyticsPanel: React.FC<{ entries: PlantEntry[]; appsScriptUrl: st
   }, []);
 
   useEffect(() => {
+    if (!useCloudSummary) {
+      setCloudSummary(null);
+      setCloudSummarySource('local');
+      setCloudSummaryLoading(false);
+      return;
+    }
+
     let active = true;
 
     const loadCloudSummary = async () => {
@@ -403,7 +436,7 @@ export const AnalyticsPanel: React.FC<{ entries: PlantEntry[]; appsScriptUrl: st
     return () => {
       active = false;
     };
-  }, [appsScriptUrl, entries.length]);
+  }, [appsScriptUrl, entries.length, useCloudSummary]);
 
   useEffect(() => {
     let active = true;
@@ -427,13 +460,14 @@ export const AnalyticsPanel: React.FC<{ entries: PlantEntry[]; appsScriptUrl: st
       const validCache: Record<string, PhotoEcologyMetric> = {};
       cached.forEach((record) => {
         const current = analyzableEntries.find((entry) => entry.id === record.entryId);
-        if (current && current.foto === record.photoRef) {
+        const currentPhotoRef = current ? (current.linkDrive || (isPreviewEntry(current) ? '' : current.foto)) : '';
+        if (current && currentPhotoRef === record.photoRef) {
           validCache[record.entryId] = fromCacheRecord(record);
         }
       });
       setPhotoMetricsById(validCache);
 
-      const recentTargets = analyzableEntries.slice(-3).filter((entry) => !validCache[entry.id]);
+      const recentTargets = analyzableEntries.slice(-1).filter((entry) => !validCache[entry.id]);
       if (recentTargets.length > 0) {
         await runBatchAnalysis(recentTargets, false, false);
       }
@@ -484,10 +518,26 @@ export const AnalyticsPanel: React.FC<{ entries: PlantEntry[]; appsScriptUrl: st
   }, [entries]);
 
   const mapPoints = useMemo<[number, number][]>(() => {
-    return entries
-      .filter((entry) => entry.gps && entry.gps.lat !== 0 && entry.gps.lon !== 0)
-      .map((entry) => [entry.gps!.lat, entry.gps!.lon]);
-  }, [entries]);
+    return mapEntries.map((entry) => [entry.gps!.lat, entry.gps!.lon]);
+  }, [mapEntries]);
+
+  const handlePopupOpen = useCallback(async (entry: PlantEntry) => {
+    if (!entry.id || popupImageById[entry.id] || popupLoadingById[entry.id]) {
+      return;
+    }
+
+    setPopupLoadingById((prev) => ({ ...prev, [entry.id]: true }));
+    try {
+      const source = await resolvePhotoSource(entry);
+      if (source) {
+        setPopupImageById((prev) => ({ ...prev, [entry.id]: source }));
+      }
+    } catch (error) {
+      console.error('Gagal memuat foto popup:', error);
+    } finally {
+      setPopupLoadingById((prev) => ({ ...prev, [entry.id]: false }));
+    }
+  }, [popupImageById, popupLoadingById]);
 
   const ecologySummary = useMemo(() => {
     const heights = entries
@@ -739,18 +789,29 @@ export const AnalyticsPanel: React.FC<{ entries: PlantEntry[]; appsScriptUrl: st
             <TileLayer url="https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}" />
             <MapRecenter center={mapCenter as [number, number]} />
             <MapAutoFit points={mapPoints} />
-            {entries
-              .filter((e) => e.gps && e.gps.lat !== 0)
-              .map((entry) => (
-                <Marker key={entry.id} position={[entry.gps!.lat, entry.gps!.lon]}>
+            {mapEntries.map((entry) => (
+                <Marker
+                  key={entry.id}
+                  position={[entry.gps!.lat, entry.gps!.lon]}
+                  eventHandlers={{
+                    popupopen: () => {
+                      void handlePopupOpen(entry);
+                    },
+                  }}
+                >
                   <Popup minWidth={220}>
                     <div className="w-full overflow-hidden">
-                      {entry.foto && (
+                      {(popupImageById[entry.id] || entry.thumbnail || entry.foto) && (
                         <img
-                          src={getHighResImageUrl(entry.foto)}
+                          src={popupImageById[entry.id] || entry.thumbnail || entry.foto}
                           className="w-full h-32 object-cover rounded-xl mb-2"
                           alt="Pohon"
+                          loading="lazy"
+                          decoding="async"
                         />
+                      )}
+                      {popupLoadingById[entry.id] && (
+                        <p className="text-[9px] font-bold text-slate-500 mb-2">Memuat foto penuh...</p>
                       )}
                       <p className="font-black text-xs uppercase">Pohon #{entry.noPohon}</p>
                       <p className="text-[10px] text-slate-500 font-bold uppercase">

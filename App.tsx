@@ -8,7 +8,15 @@ import { uploadToAppsScript } from './services/uploadService';
 import { watchGpsLocation } from './services/gpsService';
 import { PlantEntry, GpsLocation, ToastState, FormState } from './types';
 import { Toast } from './components/Toast';
-import { getAllEntries, saveEntry, updateEntrySyncMeta, clearAllEntries } from './services/dbService';
+import {
+  getEntryStats,
+  getPendingEntries,
+  getRecentEntries,
+  getRecentEntriesPreview,
+  saveEntry,
+  updateEntrySyncMeta,
+  clearAllEntries,
+} from './services/dbService';
 import { checkInternetConnection } from './services/networkService';
 import { generateHealthDescription, type PlantHealthResult } from './ecology/plantHealth';
 
@@ -35,6 +43,7 @@ const dataUrlToFile = async (dataUrl: string, fileName: string): Promise<File> =
 
 const GPS_ACCURACY_THRESHOLD_M = 20;
 const DESKTOP_GPS_ACCURACY_THRESHOLD_M = 60;
+const MAX_ACTIVE_ENTRIES = 60;
 const DEFAULT_APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwwxuFkJCGh0FLY3-RpCbrCzltrXH5eVUIuK0qScj5f9DnkgdZwRFfC0mz1xBQMhBTmfQ/exec';
 const LEGACY_APPS_SCRIPT_URLS = [
   'https://script.google.com/macros/s/AKfycbyOLIVrNrxyFIJHklKTUFEX-ckqPaORCo9ga6n7d_FGct5v01o5ZqD44bWj138zcTq49Q/exec',
@@ -179,6 +188,8 @@ const App: React.FC = () => {
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [isSyncing, setIsSyncing] = useState(false);
   const [lastSyncAt, setLastSyncAt] = useState<string | null>(null);
+  const [totalEntriesCount, setTotalEntriesCount] = useState(0);
+  const [pendingEntriesCount, setPendingEntriesCount] = useState(0);
   const syncInProgressRef = useRef(false);
 
   const [formState, setFormState] = useLocalStorage<FormState>('formState', {
@@ -222,17 +233,23 @@ const App: React.FC = () => {
     }));
   }, [formState.spacingX, formState.spacingY, setFormState]);
 
-  useEffect(() => {
-    const loadData = async () => {
-      try {
-        const data = await getAllEntries();
-        setEntries(data);
-      } catch (err) {
-        console.error("Gagal memuat database:", err);
-      }
-    };
-    loadData();
+  const refreshActiveEntries = useCallback(async () => {
+    try {
+      const [recentEntries, stats] = await Promise.all([
+        getRecentEntriesPreview(MAX_ACTIVE_ENTRIES),
+        getEntryStats(),
+      ]);
+      setEntries(recentEntries);
+      setTotalEntriesCount(stats.total);
+      setPendingEntriesCount(stats.pending);
+    } catch (err) {
+      console.error('Gagal memuat database:', err);
+    }
   }, []);
+
+  useEffect(() => {
+    void refreshActiveEntries();
+  }, [refreshActiveEntries]);
 
   const showToast = useCallback((message: string, type: 'success' | 'error' | 'info' = 'info', duration: number = 3000) => {
     setToast({ message, type });
@@ -323,8 +340,9 @@ const App: React.FC = () => {
       return;
     }
 
+    const storedPending = await getPendingEntries();
     const nowMs = Date.now();
-    const pending = entries.filter((entry) => {
+    const pending = storedPending.filter((entry) => {
       if (entry.uploaded) {
         return false;
       }
@@ -413,9 +431,9 @@ const App: React.FC = () => {
         }
       }
 
+      await refreshActiveEntries();
+
       if (successCount > 0 || unconfirmedCount > 0) {
-        const updatedData = await getAllEntries();
-        setEntries(updatedData);
         setLastSyncAt(new Date().toISOString());
         if (unconfirmedCount > 0) {
           const prefix = successCount > 0 ? `${successCount} data terverifikasi.` : 'Belum ada data terverifikasi.';
@@ -437,7 +455,7 @@ const App: React.FC = () => {
       setIsSyncing(false);
       syncInProgressRef.current = false;
     }
-  }, [entries, appsScriptUrl, showToast, isOnline]);
+  }, [appsScriptUrl, showToast, isOnline, refreshActiveEntries]);
 
   useEffect(() => {
     if (!isOnline) {
@@ -491,7 +509,7 @@ const App: React.FC = () => {
     };
   }, [isOnline, syncPendingEntries]);
 
-  const handleCapture = useCallback(async (dataUrl: string, aiHealth?: PlantHealthResult | null) => {
+  const handleCapture = useCallback(async (dataUrl: string, aiHealth?: PlantHealthResult | null, thumbnailDataUrl?: string) => {
     const timestamp = new Date();
     const pad = (n: number, len: number = 2) => n.toString().padStart(len, '0');
     const id = `${timestamp.getFullYear()}${pad(timestamp.getMonth() + 1)}${pad(timestamp.getDate())}-${pad(timestamp.getHours())}${pad(timestamp.getMinutes())}${pad(timestamp.getSeconds())}${pad(timestamp.getMilliseconds(), 3)}`;
@@ -566,7 +584,8 @@ const App: React.FC = () => {
         : undefined,
       distanceFromAnchorM: distanceToAnchor,
       snappedToGrid: Boolean(snappedCoordinate),
-      noPohon: entries.length + 1,
+      thumbnail: thumbnailDataUrl,
+      noPohon: totalEntriesCount + 1,
       uploaded: false,
       retryCount: 0,
       statusDuplikat: "UNIK",
@@ -583,9 +602,15 @@ const App: React.FC = () => {
       const photoWithExif = await writeExifData(dataUrl, newEntryMeta);
       
       const finalEntry: PlantEntry = { ...newEntryMeta, foto: photoWithExif };
+      const previewEntry: PlantEntry = {
+        ...finalEntry,
+        foto: finalEntry.thumbnail || finalEntry.foto,
+      };
       
       await saveEntry(finalEntry);
-      setEntries(prev => [...prev, finalEntry]);
+      setEntries((prev) => [previewEntry, ...prev].slice(0, MAX_ACTIVE_ENTRIES));
+      setTotalEntriesCount((prev) => prev + 1);
+      setPendingEntriesCount((prev) => prev + 1);
 
       const fileName = `TREE_${formState.jenis.toUpperCase()}_${id}.jpg`;
 
@@ -655,6 +680,7 @@ const App: React.FC = () => {
               lastSyncError: '',
             });
             setEntries(prev => prev.map(e => e.id === finalEntry.id ? { ...e, uploaded: true, retryCount: 0, lastSyncError: '' } : e));
+            setPendingEntriesCount((prev) => Math.max(0, prev - 1));
             setLastSyncAt(new Date().toISOString());
             showToast('Berhasil Tersinkron!', 'success');
           } else {
@@ -685,12 +711,14 @@ const App: React.FC = () => {
       console.error(error);
       showToast('Gagal memproses gambar.', 'error');
     }
-  }, [formState, gps, gridAnchor, entries.length, appsScriptUrl, showToast, isOnline]);
+  }, [formState, gps, gridAnchor, totalEntriesCount, appsScriptUrl, showToast, isOnline]);
 
   const handleClearData = async () => {
     if (window.confirm('Hapus semua data dari database lokal?')) {
       await clearAllEntries();
       setEntries([]);
+      setTotalEntriesCount(0);
+      setPendingEntriesCount(0);
       showToast('Database dibersihkan.', 'success');
     }
   };
@@ -701,8 +729,8 @@ const App: React.FC = () => {
         onCapture={handleCapture}
         formState={formState}
         onFormStateChange={setFormState}
-        entriesCount={entries.length}
-        pendingCount={entries.filter((entry) => !entry.uploaded).length}
+        entriesCount={totalEntriesCount}
+        pendingCount={pendingEntriesCount}
         isSyncing={isSyncing}
         lastSyncAt={lastSyncAt}
         gps={gps}
@@ -720,6 +748,8 @@ const App: React.FC = () => {
         isOpen={isBottomSheetOpen}
         onClose={() => setBottomSheetOpen(false)}
         entries={entries}
+        totalEntriesCount={totalEntriesCount}
+        pendingEntriesCount={pendingEntriesCount}
         formState={formState}
         onFormStateChange={setFormState}
         onClearData={handleClearData}

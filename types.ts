@@ -29,6 +29,7 @@ export interface PlantEntry {
   gridAnchorKoordinat?: string;
   distanceFromAnchorM?: number;
   snappedToGrid?: boolean;
+  thumbnail?: string;
   foto: string; // base64
   uploaded?: boolean;
   retryCount?: number;

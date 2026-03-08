@@ -50,6 +50,8 @@ interface BottomSheetProps {
   isOpen: boolean;
   onClose: () => void;
   entries: PlantEntry[];
+  totalEntriesCount: number;
+  pendingEntriesCount: number;
   formState: FormState;
   onFormStateChange: React.Dispatch<React.SetStateAction<FormState>>;
   onClearData: () => void;
@@ -70,7 +72,7 @@ const TabLoader = () => (
 );
 
 export const BottomSheet: React.FC<BottomSheetProps> = ({
-  isOpen, onClose, entries, formState, onFormStateChange, onClearData, appsScriptUrl, onAppsScriptUrlChange, onSyncPending, isOnline
+  isOpen, onClose, entries, totalEntriesCount, pendingEntriesCount, formState, onFormStateChange, onClearData, appsScriptUrl, onAppsScriptUrlChange, onSyncPending, isOnline
 }) => {
   const [activeTab, setActiveTab] = useState('form');
 
@@ -117,9 +119,9 @@ export const BottomSheet: React.FC<BottomSheetProps> = ({
           <Suspense fallback={<TabLoader />}>
             {activeTab === 'form' && <FormTab formState={formState} onFormStateChange={onFormStateChange} />}
             {activeTab === 'grafik' && <AnalyticsTab entries={entries} appsScriptUrl={appsScriptUrl} isOnline={isOnline} />}
-            {activeTab === 'data' && <DataTab entries={entries} isOnline={isOnline} onSyncPending={onSyncPending} />}
+            {activeTab === 'data' && <DataTab entries={entries} totalEntriesCount={totalEntriesCount} pendingCount={pendingEntriesCount} isOnline={isOnline} onSyncPending={onSyncPending} />}
             {activeTab === 'dashboard' && <OnlineDashboardTab appsScriptUrl={appsScriptUrl} isOnline={isOnline} />}
-            {activeTab === 'pengaturan' && <SettingsTab appsScriptUrl={appsScriptUrl} onAppsScriptUrlChange={onAppsScriptUrlChange} entries={entries} onClearData={onClearData} />}
+            {activeTab === 'pengaturan' && <SettingsTab appsScriptUrl={appsScriptUrl} onAppsScriptUrlChange={onAppsScriptUrlChange} onClearData={onClearData} />}
           </Suspense>
         </div>
       </div>

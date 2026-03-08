@@ -4,6 +4,43 @@ import { PlantEntry } from '../types';
 declare const JSZip: any;
 declare const saveAs: any;
 
+interface ExportProgress {
+  current: number;
+  total: number;
+  phase: 'preparing' | 'packaging' | 'saving';
+}
+
+interface ExportOptions {
+  onProgress?: (progress: ExportProgress) => void;
+}
+
+const EXPORT_CHUNK_SIZE = 8;
+
+const yieldToMainThread = async (): Promise<void> =>
+  new Promise((resolve) => {
+    window.setTimeout(resolve, 0);
+  });
+
+const emitProgress = (
+  onProgress: ExportOptions['onProgress'],
+  current: number,
+  total: number,
+  phase: ExportProgress['phase'],
+): void => {
+  if (!onProgress) {
+    return;
+  }
+  onProgress({ current, total, phase });
+};
+
+const getBase64Payload = (dataUrl: string): string => {
+  if (!dataUrl) {
+    return '';
+  }
+  const commaIndex = dataUrl.indexOf(',');
+  return commaIndex >= 0 ? dataUrl.slice(commaIndex + 1) : dataUrl;
+};
+
 const dataURLtoBlob = (dataurl: string) => {
   const arr = dataurl.split(',');
   const mimeMatch = (arr[0].match(/:(.*?);/)||[])[1] || 'image/jpeg';
@@ -43,16 +80,29 @@ export const exportToCSV = (entries: PlantEntry[]) => {
   document.body.removeChild(link);
 };
 
-export const exportToZIP = async (entries: PlantEntry[]) => {
+export const exportToZIP = async (entries: PlantEntry[], options: ExportOptions = {}) => {
   const zip = new JSZip();
   const imagesFolder = zip.folder("images");
   
   if (!imagesFolder) return;
 
-  entries.forEach((entry, index) => {
-    const base64Data = entry.foto.split(',')[1];
-    imagesFolder.file(`foto_${entry.id}.jpg`, base64Data, { base64: true });
-  });
+  const exportableEntries = entries.filter((entry) => Boolean(entry.foto));
+  const total = exportableEntries.length;
+
+  emitProgress(options.onProgress, 0, total, 'preparing');
+
+  for (let index = 0; index < exportableEntries.length; index += 1) {
+    const entry = exportableEntries[index];
+    const base64Data = getBase64Payload(entry.foto);
+    if (base64Data) {
+      imagesFolder.file(`foto_${entry.id}.jpg`, base64Data, { base64: true, compression: 'STORE' });
+    }
+
+    emitProgress(options.onProgress, index + 1, total, 'preparing');
+    if ((index + 1) % EXPORT_CHUNK_SIZE === 0) {
+      await yieldToMainThread();
+    }
+  }
 
   // Also include CSV data
   const headers = ['ID', 'Timestamp', 'Tinggi (cm)', 'Jenis', 'Kesehatan', 'Lokasi', 'Tahun Tanam', 'Image File'];
@@ -61,7 +111,15 @@ export const exportToZIP = async (entries: PlantEntry[]) => {
   const csvContent = [headers.join(','), ...rows.map(row => row.join(','))].join('\n');
   zip.file("data_monitoring.csv", csvContent);
 
-  const content = await zip.generateAsync({ type: "blob" });
+  emitProgress(options.onProgress, total, total, 'packaging');
+  const content = await zip.generateAsync(
+    { type: "blob", streamFiles: true, compression: 'STORE' },
+    (metadata: { percent: number }) => {
+      const current = Math.min(total, Math.max(0, Math.round((metadata.percent / 100) * Math.max(total, 1))));
+      emitProgress(options.onProgress, current, total, 'packaging');
+    },
+  );
+  emitProgress(options.onProgress, total, total, 'saving');
   saveAs(content, "monitoring_tanaman_export.zip");
 };
 
@@ -80,18 +138,26 @@ const escapeXml = (s: any): string => {
 };
 
 
-export const exportToKMZ = async (entries: PlantEntry[]) => {
+export const exportToKMZ = async (entries: PlantEntry[], options: ExportOptions = {}) => {
   const zip = new JSZip();
   const filesFolder = zip.folder("files");
   if (!filesFolder) return;
 
   let kmlPlacemarks = '';
-  entries.forEach((entry) => {
+  const exportableEntries = entries.filter((entry) => entry.gps && entry.foto);
+  const total = exportableEntries.length;
+
+  emitProgress(options.onProgress, 0, total, 'preparing');
+
+  for (let index = 0; index < exportableEntries.length; index += 1) {
+    const entry = exportableEntries[index];
     // FIX: Check 'entry.gps' for coordinates.
     if (entry.gps) {
         const imageName = `foto_${entry.id}.jpg`;
-        const base64Data = entry.foto.split(',')[1];
-        filesFolder.file(imageName, base64Data, { base64: true });
+        const base64Data = getBase64Payload(entry.foto);
+        if (base64Data) {
+          filesFolder.file(imageName, base64Data, { base64: true, compression: 'STORE' });
+        }
 
         // FIX: Use 'tanaman' and correctly handle timestamp.
         kmlPlacemarks += `
@@ -111,7 +177,12 @@ export const exportToKMZ = async (entries: PlantEntry[]) => {
       </Point>
     </Placemark>`;
     }
-  });
+
+    emitProgress(options.onProgress, index + 1, total, 'preparing');
+    if ((index + 1) % EXPORT_CHUNK_SIZE === 0) {
+      await yieldToMainThread();
+    }
+  }
 
   const kmlContent = `<?xml version="1.0" encoding="UTF-8"?>
 <kml xmlns="http://www.opengis.net/kml/2.2">
@@ -122,6 +193,14 @@ export const exportToKMZ = async (entries: PlantEntry[]) => {
 </kml>`;
 
   zip.file("doc.kml", kmlContent);
-  const content = await zip.generateAsync({ type: "blob" });
+  emitProgress(options.onProgress, total, total, 'packaging');
+  const content = await zip.generateAsync(
+    { type: "blob", streamFiles: true, compression: 'STORE' },
+    (metadata: { percent: number }) => {
+      const current = Math.min(total, Math.max(0, Math.round((metadata.percent / 100) * Math.max(total, 1))));
+      emitProgress(options.onProgress, current, total, 'packaging');
+    },
+  );
+  emitProgress(options.onProgress, total, total, 'saving');
   saveAs(content, "monitoring_tanaman.kmz");
 };

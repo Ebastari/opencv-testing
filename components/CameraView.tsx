@@ -6,7 +6,7 @@ import { Compass } from './Compass';
 import { analyzePlantHealthHSV, type PlantHealthResult } from '../ecology/plantHealth';
 
 interface CameraViewProps {
-  onCapture: (dataUrl: string, aiHealth?: PlantHealthResult | null) => void;
+  onCapture: (dataUrl: string, aiHealth?: PlantHealthResult | null, thumbnailDataUrl?: string) => void;
   formState: FormState;
   onFormStateChange: React.Dispatch<React.SetStateAction<FormState>>;
   entriesCount: number;
@@ -28,6 +28,7 @@ interface CameraViewProps {
 const PLANT_TYPES = ['Sengon', 'Nangka', 'Mahoni', 'Malapari'];
 const DAILY_TARGET = 50;
 const BRAND_NAME = "PT ENERGI BATUBARA LESTARI";
+const MAX_THUMBNAIL_SIZE = 320;
 
 const SHUTTER_SOUND_BASE64 = "data:audio/wav;base64,UklGRl9vT19XQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YU92T18AZm9vYmFyYmF6cXV4enV4enV4enV4enV4enV4enV4enV4enV4enV4enV4enV4enV4enV4enV4enV4enV4enV4enV4enV4enV4enV4enV4enV4enV4enV4enV4enV4enV4enV4enV4enV4enV4enV4enV4enV4enV4enV4enV4enV4";
 
@@ -251,8 +252,21 @@ export const CameraView: React.FC<CameraViewProps> = ({
     ctx.strokeText(BRAND_NAME, canvas.width - margin - brandWidth, margin + lh);
     ctx.fillText(BRAND_NAME, canvas.width - margin - brandWidth, margin + lh);
 
+    const thumbnailCanvas = document.createElement('canvas');
+    const thumbnailScale = Math.min(1, MAX_THUMBNAIL_SIZE / Math.max(canvas.width, canvas.height));
+    thumbnailCanvas.width = Math.max(1, Math.round(canvas.width * thumbnailScale));
+    thumbnailCanvas.height = Math.max(1, Math.round(canvas.height * thumbnailScale));
+    const thumbnailContext = thumbnailCanvas.getContext('2d');
+    let thumbnailDataUrl: string | undefined;
+    if (thumbnailContext) {
+      thumbnailContext.drawImage(canvas, 0, 0, thumbnailCanvas.width, thumbnailCanvas.height);
+      thumbnailDataUrl = thumbnailCanvas.toDataURL('image/jpeg', 0.6);
+    }
+    thumbnailCanvas.width = 0;
+    thumbnailCanvas.height = 0;
+
     // Kirim data JPEG kualitas tinggi
-    onCapture(canvas.toDataURL('image/jpeg', 0.85), livePlantHealth);
+    onCapture(canvas.toDataURL('image/jpeg', 0.85), livePlantHealth, thumbnailDataUrl);
   }, [onCapture, formState, gps, entriesCount, showToast, livePlantHealth]);
 
   useEffect(() => {

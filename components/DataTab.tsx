@@ -4,6 +4,8 @@ import { PlantEntry } from '../types';
 
 interface DataTabProps {
   entries: PlantEntry[];
+  totalEntriesCount: number;
+  pendingCount: number;
   isOnline: boolean;
   onSyncPending: () => Promise<void>;
 }
@@ -39,11 +41,11 @@ const getNextRetryText = (entry: PlantEntry): string => {
   return `Retry ${seconds} dtk lagi`;
 };
 
-export const DataTab: React.FC<DataTabProps> = ({ entries, isOnline, onSyncPending }) => {
+export const DataTab: React.FC<DataTabProps> = ({ entries, totalEntriesCount, pendingCount, isOnline, onSyncPending }) => {
   const [currentPage, setCurrentPage] = useState(1);
   const [isSyncing, setIsSyncing] = useState(false);
 
-  const pendingCount = useMemo(() => entries.filter(e => !e.uploaded).length, [entries]);
+  const getPreviewSrc = (entry: PlantEntry): string => entry.thumbnail || entry.foto;
 
   const sortedEntries = useMemo(() => {
     return [...entries].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
@@ -85,7 +87,7 @@ export const DataTab: React.FC<DataTabProps> = ({ entries, isOnline, onSyncPendi
         <div className="flex flex-col gap-1">
           <h3 className="font-black text-lg text-slate-800 leading-none">Penyimpanan</h3>
           <div className="flex items-center gap-2">
-            <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{entries.length} Entri Tersimpan</span>
+            <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{totalEntriesCount} Entri Tersimpan</span>
           </div>
         </div>
         
@@ -111,7 +113,7 @@ export const DataTab: React.FC<DataTabProps> = ({ entries, isOnline, onSyncPendi
           <div className="px-1 group">
             <div className="bg-white p-2 rounded-[3rem] border border-slate-100 shadow-xl overflow-hidden">
               <div className="relative aspect-[4/3] w-full rounded-[2.5rem] overflow-hidden bg-slate-100">
-                <img src={latestEntry.foto} className="w-full h-full object-cover" alt="Terakhir" />
+                <img src={getPreviewSrc(latestEntry)} className="w-full h-full object-cover" alt="Terakhir" />
                 <div className="absolute top-5 left-5 right-5 flex justify-between items-start">
                    <div className={`px-4 py-2 rounded-2xl backdrop-blur-xl border flex items-center gap-2 shadow-2xl ${latestEntry.uploaded ? 'bg-blue-600/80 border-blue-400/50' : 'bg-amber-500/80 border-amber-400/50'}`}>
                       <span className="text-[10px] font-black text-white uppercase tracking-[0.2em]">{latestEntry.uploaded ? 'Sync Cloud' : 'Local'}</span>
@@ -120,6 +122,12 @@ export const DataTab: React.FC<DataTabProps> = ({ entries, isOnline, onSyncPendi
               </div>
             </div>
           </div>
+
+          {totalEntriesCount > entries.length && (
+            <p className="px-3 text-[9px] font-bold text-slate-500">
+              Menampilkan {entries.length} entri terbaru untuk menjaga browser tetap ringan.
+            </p>
+          )}
 
           <div className="space-y-4 pt-4">
             {pendingEntries.length > 0 && (
@@ -156,7 +164,7 @@ export const DataTab: React.FC<DataTabProps> = ({ entries, isOnline, onSyncPendi
                 <div key={entry.id} className="bg-white p-4 rounded-[2rem] border border-slate-100 flex gap-4 items-center group active:scale-[0.98] transition-all relative">
                   <div className="relative h-16 w-16 rounded-[1.25rem] overflow-hidden flex-shrink-0 bg-slate-50 border border-slate-50">
                     <img 
-                      src={entry.foto} 
+                      src={getPreviewSrc(entry)} 
                       className="h-full w-full object-cover" 
                       loading="lazy" 
                       alt="thumbnail" 
