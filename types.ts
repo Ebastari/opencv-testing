@@ -5,6 +5,36 @@ export interface GpsLocation {
   accuracy: number;
 }
 
+// ============================================
+// GRID SYSTEM TYPES
+// ============================================
+
+export type GridDirection = 'north' | 'south' | 'east' | 'west' | 'none';
+
+export interface GridConfig {
+  spacingX: number; // meters between columns
+  spacingY: number; // meters between rows
+  captureThresholdM: number; // max distance to allow capture (default: 1m)
+}
+
+export interface GridPoint {
+  lat: number;
+  lon: number;
+  stepX: number; // column index
+  stepY: number; // row index
+}
+
+export interface GridState {
+  anchor: GridPoint; // starting point (set by user)
+  currentTarget: GridPoint | null; // current target point to move to
+  currentPosition: GridPoint | null; // user's snapped position
+  direction: GridDirection; // which direction to move
+  distanceToTargetM: number; // distance to target point
+  isAtTarget: boolean; // true if within capture threshold
+  lastCaptureStepX: number;
+  lastCaptureStepY: number;
+}
+
 export interface PlantEntry {
     /**
      * Mode pengambilan data: 'manual' untuk sampel manual, 'ai' untuk otomatis
