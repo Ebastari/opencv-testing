@@ -7,6 +7,18 @@ import { Compass } from './Compass';
 import { LiveHealthComment } from './LiveHealthComment';
 import { analyzePlantHealthHSV, type PlantHealthResult } from '../ecology/plantHealth';
 import { detectPlantHeightOpenCV, loadOpenCV } from '../ecology/plantDetection';
+import { detectPlantsRealtime, pixelsToCentimeters, DEFAULT_VEGETATION_HSV, type DetectedPlant } from '../ecology/plantDetectionModule';
+import { PlantDetectionOverlay } from './PlantDetectionOverlay';
+import { 
+  calculateDistanceMeters, 
+  calculateDirectionToPoint, 
+  isWithinCaptureThreshold, 
+  formatDistance, 
+  getDirectionArrow,
+  getDirectionLabel,
+  gridPointToGps,
+  DEFAULT_CAPTURE_THRESHOLD_M 
+} from '../services/gridService';
 
 interface HeightAiEstimate {
   cm: number;
@@ -16,6 +28,12 @@ interface HeightAiEstimate {
 interface HeightAiRange {
   min: number;
   max: number;
+}
+
+// New: Height Measurement Mode Types
+interface MeasurePoint {
+  x: number;
+  y: number;
 }
 
 const HEIGHT_MIN_CM = 30;
@@ -229,7 +247,139 @@ export const CameraView: React.FC<CameraViewProps> = ({
     }
   });
 
-  // Proses kalibrasi dimulai saat mode AI diaktifkan
+  // NEW: Manual Height Measurement Mode
+  const [isMeasureMode, setIsMeasureMode] = useState(false);
+  const [measurePoints, setMeasurePoints] = useState<MeasurePoint[]>([]);
+  const [stickHeightMeters, setStickHeightMeters] = useState(2); // Default 2 meters
+  const [lineOffsetPercent, setLineOffsetPercent] = useState(15); // Default 15%
+  const [measuredHeightCm, setMeasuredHeightCm] = useState<number | null>(null);
+  const [measureGuideText, setMeasureGuideText] = useState('');
+  
+  // Canvas ref for measurement overlay
+  const measureCanvasRef = useRef<HTMLCanvasElement>(null);
+
+  // Calculate height from measurement points
+  const calculateMeasureHeight = useCallback((points: MeasurePoint[], videoHeight: number) => {
+    if (points.length !== 2) return null;
+    
+    const [p1, p2] = points;
+    const lineOffset = lineOffsetPercent / 100;
+    const pixelDistanceStick = videoHeight * lineOffset * 2;
+    const pixelDistanceTree = Math.abs(p1.y - p2.y);
+    const heightMeters = (pixelDistanceTree / pixelDistanceStick) * stickHeightMeters;
+    return heightMeters * 100; // Convert to cm
+  }, [lineOffsetPercent, stickHeightMeters]);
+
+  // Handle measurement mode toggle - mutually exclusive with AI mode
+  const handleToggleMeasureMode = useCallback(() => {
+    if (isMeasureMode) {
+      // Turn off measurement mode
+      setIsMeasureMode(false);
+      setMeasurePoints([]);
+      setMeasuredHeightCm(null);
+      setMeasureGuideText('');
+    } else {
+      // Turn on measurement mode, turn off AI mode
+      setIsMeasureMode(true);
+      setIsHeightAiMode(false);
+      setHeightAiEstimate(null);
+      setMeasurePoints([]);
+      setMeasuredHeightCm(null);
+      setMeasureGuideText('Ketuk titik dasar pohon');
+      showToast('Mode Ukur Tinggi aktif.', 'info');
+    }
+  }, [isMeasureMode, showToast]);
+
+  // Handle canvas click for measurement
+  const handleMeasureCanvasClick = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!isMeasureMode || measurePoints.length >= 2) return;
+    
+    const canvas = measureCanvasRef.current;
+    if (!canvas) return;
+    
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const x = (e.clientX - rect.left) * scaleX;
+    const y = (e.clientY - rect.top) * scaleY;
+    
+    const newPoints = [...measurePoints, { x, y }];
+    setMeasurePoints(newPoints);
+    
+    if (newPoints.length === 1) {
+      setMeasureGuideText('Sekarang, ketuk titik ujung pohon');
+    } else if (newPoints.length === 2) {
+      // Calculate height
+      const heightCm = calculateMeasureHeight(newPoints, canvas.height);
+      if (heightCm) {
+        setMeasuredHeightCm(heightCm);
+        setMeasureGuideText(`Tinggi: ${(heightCm / 100).toFixed(2)} m`);
+        // Auto-sync to form state
+        onFormStateChange(prev => ({ ...prev, tinggi: Math.round(heightCm) }));
+        showToast(`Tinggi terukur: ${(heightCm / 100).toFixed(2)} m`, 'success');
+      }
+    }
+  }, [isMeasureMode, measurePoints, calculateMeasureHeight, onFormStateChange, showToast]);
+
+  // Draw measurement overlay
+  useEffect(() => {
+    const canvas = measureCanvasRef.current;
+    if (!canvas || !isMeasureMode) return;
+    
+    const video = videoRef.current;
+    if (!video) return;
+    
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    
+    // Set canvas size to match video
+    canvas.width = video.videoWidth || 640;
+    canvas.height = video.videoHeight || 480;
+    
+    // Clear canvas
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    
+    // Draw grid lines (reference for stick)
+    const lineOffset = lineOffsetPercent / 100;
+    const y1 = canvas.height * (0.5 - lineOffset);
+    const y2 = canvas.height * (0.5 + lineOffset);
+    
+    ctx.strokeStyle = '#FF3860';
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(0, y1);
+    ctx.lineTo(canvas.width, y1);
+    ctx.moveTo(0, y2);
+    ctx.lineTo(canvas.width, y2);
+    ctx.stroke();
+    
+    // Draw stick height label
+    ctx.fillStyle = 'white';
+    ctx.font = 'bold 24px sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillText(`${stickHeightMeters} m`, canvas.width - 20, y1 + (y2 - y1) / 2 + 10);
+    
+    // Draw measurement points
+    measurePoints.forEach((p, i) => {
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 16, 0, 2 * Math.PI);
+      ctx.fillStyle = i === 0 ? 'rgba(0,255,0,0.9)' : 'rgba(255,0,0,0.9)';
+      ctx.fill();
+      ctx.strokeStyle = 'white';
+      ctx.lineWidth = 4;
+      ctx.stroke();
+    });
+    
+    // Draw line between points if we have 2 points
+    if (measurePoints.length === 2) {
+      ctx.beginPath();
+      ctx.moveTo(measurePoints[0].x, measurePoints[0].y);
+      ctx.lineTo(measurePoints[1].x, measurePoints[1].y);
+      ctx.strokeStyle = '#FF3860';
+      ctx.lineWidth = 3;
+      ctx.stroke();
+    }
+  }, [isMeasureMode, measurePoints, lineOffsetPercent, stickHeightMeters]);
   useEffect(() => {
     if (isHeightAiMode && heightAiSamples.length < 10) {
       setCalibrationActive(true);
@@ -251,7 +401,13 @@ export const CameraView: React.FC<CameraViewProps> = ({
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const analysisCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const boundingBoxCanvasRef = useRef<HTMLCanvasElement>(null);
   const shutterSoundRef = useRef<HTMLAudioElement>(null);
+  
+  // State untuk plant detection overlay
+  const [detectionError, setDetectionError] = useState<string | null>(null);
+  const [detectedPlants, setDetectedPlants] = useState<{x: number; y: number; width: number; height: number; confidence: number}[]>([]);
+  const [showBoundingBox, setShowBoundingBox] = useState(true);
   const [heightAiNoticeDismissed, setHeightAiNoticeDismissed] = useState<boolean>(() => {
     try {
       return window.localStorage.getItem(HEIGHT_AI_NOTICE_DISMISSED_KEY) === '1';
@@ -656,7 +812,17 @@ export const CameraView: React.FC<CameraViewProps> = ({
               tempCanvas.height = imageData.height;
               const tempCtx = tempCanvas.getContext('2d');
               if (tempCtx) tempCtx.putImageData(imageData, 0, 0);
-              const result = await detectPlantHeightOpenCV(tempCanvas);
+              
+              // Hitung scaling factor karena canvas di-downscale ke ANALYSIS_SIZE (160px)
+              // Default pixelToCmRatio 0.04 dirancang untuk resolusi tinggi, bukan 160x160
+              // Kita perlu melakukan upscale agar rasio pixel-to-cm sesuai
+              const ANALYSIS_SIZE = 160; // Harus sama dengan nilai di atas
+              const scaleFactor = ANALYSIS_SIZE / 80; // Asumsi tanaman mengisi ~80px di canvas 160px = tinggi tanaman ~2m
+              const adjustedPixelToCmRatio = 0.04 * scaleFactor; // 0.04 * 2 = 0.08
+              
+              const result = await detectPlantHeightOpenCV(tempCanvas, {
+                pixelToCmRatio: adjustedPixelToCmRatio
+              });
               const cm = result.plantHeightCm;
               // Jika tidak terdeteksi (tinggi 0), set confidence rendah
               const displayEstimate: HeightAiEstimate = {
@@ -722,23 +888,232 @@ export const CameraView: React.FC<CameraViewProps> = ({
     };
   }, []);
 
+  // DISABLED: Plant detection effect - causes lag on mobile devices
+  // Re-enable if you need real-time plant bounding boxes
+  /*
+  useEffect(() => {
+    const video = videoRef.current;
+    const bbCanvas = boundingBoxCanvasRef.current;
+    
+    if (!video || !bbCanvas || cameraLoading || cameraError || needsUserAction) {
+      return;
+    }
+
+    const ctx = bbCanvas.getContext('2d');
+    if (!ctx) return;
+
+    const runDetection = async () => {
+      const v = videoRef.current;
+      if (!v || v.videoWidth === 0 || v.videoHeight === 0 || v.readyState < 2) {
+        console.warn('[DEBUG] Video belum siap', {
+          v,
+          videoWidth: v?.videoWidth,
+          videoHeight: v?.videoHeight,
+          readyState: v?.readyState
+        });
+        setDetectionError('Video belum siap untuk deteksi');
+        return;
+      }
+
+      const startTime = performance.now();
+      try {
+        if (bbCanvas.width !== v.videoWidth || bbCanvas.height !== v.videoHeight) {
+          bbCanvas.width = v.videoWidth;
+          bbCanvas.height = v.videoHeight;
+        }
+        ctx.clearRect(0, 0, bbCanvas.width, bbCanvas.height);
+        const detectionResult = await detectPlantsRealtime(v);
+        const elapsed = performance.now() - startTime;
+        console.log('[DEBUG] detectionResult', detectionResult, 'Processing time:', elapsed, 'ms');
+        if (detectionResult.error) {
+          setDetectionError('Deteksi gagal: ' + detectionResult.error);
+        } else if (!detectionResult.plants || detectionResult.plants.length === 0) {
+          setDetectionError('Tidak ada tanaman terdeteksi');
+        } else {
+          setDetectionError(null);
+        }
+        if (detectionResult.plants && detectionResult.plants.length > 0) {
+          const scaleX = v.videoWidth / 160;
+          const scaleY = v.videoHeight / 160;
+          detectionResult.plants.forEach((plant, index) => {
+            const colors = ['#00FF00', '#00FFFF', '#FF00FF', '#FFFF00', '#FF6B6B', '#4ECDC4'];
+            const color = colors[index % colors.length];
+            const x = plant.x * scaleX;
+            const y = plant.y * scaleY;
+            const width = plant.width * scaleX;
+            const height = plant.height * scaleY;
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 3;
+            ctx.strokeRect(x, y, width, height);
+            const heightPx = Math.round(plant.height);
+            ctx.fillStyle = color;
+            ctx.font = 'bold 16px sans-serif';
+            ctx.fillText(`Plant ${index + 1}: ${heightPx}px`, x, Math.max(y - 10, 20));
+            setDetectedPlants(prev => [...prev, {
+              x: plant.x,
+              y: plant.y,
+              width: plant.width,
+              height: plant.height,
+              confidence: plant.confidence
+            }]);
+          });
+        }
+        if (elapsed > 1000) {
+          setDetectionError(`Proses deteksi lambat: ${Math.round(elapsed)} ms. Coba kurangi resolusi atau tutup aplikasi lain.`);
+        }
+      } catch (err) {
+        console.error('[DEBUG] Detection frame error:', err);
+        setDetectionError('Error deteksi: ' + (err?.message || err));
+      }
+    };
+
+    // Run initial detection
+    runDetection();
+    
+    // Set up interval for continuous detection (every 2 seconds)
+    timerId = window.setInterval(runDetection, 2000);
+
+    return () => {
+      if (timerId !== null) {
+        window.clearInterval(timerId);
+      }
+    };
+  }, [cameraLoading, cameraError, needsUserAction, isHeightAiMode]);
+  */
+
+  // Calculate grid guidance values
+  const gridGuidance = useMemo(() => {
+    if (!gridAnchor || !effectiveCoordinate || !gps) {
+      return null;
+    }
+    
+    const targetStepX = effectiveCoordinate.stepX;
+    const targetStepY = effectiveCoordinate.stepY;
+    const currentStepX = effectiveCoordinate.stepX;
+    const currentStepY = effectiveCoordinate.stepY;
+    
+    // Calculate distance to target (current position)
+    const distanceToTarget = distanceFromAnchorM ?? 0;
+    const isAtTarget = isWithinCaptureThreshold(distanceToTarget, DEFAULT_CAPTURE_THRESHOLD_M);
+    
+    // Get direction (simplified - shows direction to move)
+    const direction = calculateDirectionToPoint(
+      currentStepX,
+      currentStepY,
+      targetStepX,
+      targetStepY
+    );
+    
+    return {
+      direction,
+      distanceToTarget,
+      isAtTarget,
+      targetStepX,
+      targetStepY,
+      currentStepX,
+      currentStepY,
+    };
+  }, [gridAnchor, effectiveCoordinate, gps, distanceFromAnchorM]);
+
+  // Simple grid overlay - only show when anchor is set
+  const shouldShowGridOverlay = gridAnchor !== null;
+
   return (
     <div className="relative w-screen h-[100dvh] min-h-[100dvh] bg-black overflow-hidden flex items-center justify-center">
-      {/* GRID OVERLAY 6x6, tipis & transparan, hanya muncul setelah 10 sampel manual */}
-      {showGridOverlay && (
+      {/* NEW GRID OVERLAY - Enhanced with target points, directional arrows, and capture feedback */}
+      {shouldShowGridOverlay && gridGuidance && (
         <div className="pointer-events-none absolute inset-0 z-20">
           <svg width="100%" height="100%" viewBox="0 0 100 100" className="w-full h-full" style={{position:'absolute',top:0,left:0}}>
-            {/* Garis vertikal */}
-            {[1,2,3,4,5].map(i => (
-              <line key={i} x1={(i*100/6).toFixed(2)} y1="0" x2={(i*100/6).toFixed(2)} y2="100" stroke="white" strokeWidth="0.5" opacity="0.25" />
+            {/* Grid lines - 4x4 grid pattern */}
+            {[1,2,3].map(i => (
+              <line key={`v${i}`} x1={(i*100/4).toFixed(2)} y1="0" x2={(i*100/4).toFixed(2)} y2="100" stroke="white" strokeWidth="0.5" opacity="0.3" />
             ))}
-            {/* Garis horizontal */}
-            {[1,2,3,4,5].map(i => (
-              <line key={i} y1={(i*100/6).toFixed(2)} x1="0" y2={(i*100/6).toFixed(2)} x2="100" stroke="white" strokeWidth="0.5" opacity="0.25" />
+            {[1,2,3].map(i => (
+              <line key={`h${i}`} y1={(i*100/4).toFixed(2)} x1="0" y2={(i*100/4).toFixed(2)} x2="100" stroke="white" strokeWidth="0.5" opacity="0.3" />
             ))}
+            
+            {/* Target point marker - center of view */}
+            <circle cx="50" cy="50" r="3" fill={gridGuidance.isAtTarget ? "#22c55e" : "#3b82f6"} opacity="0.8" />
+            
+            {/* Green feedback ring when at target */}
+            {gridGuidance.isAtTarget && (
+              <circle cx="50" cy="50" r="8" fill="none" stroke="#22c55e" strokeWidth="1" opacity="0.6">
+                <animate attributeName="r" values="6;12;6" dur="1.5s" repeatCount="indefinite" />
+                <animate attributeName="opacity" values="0.8;0.2;0.8" dur="1.5s" repeatCount="indefinite" />
+              </circle>
+            )}
+            
+            {/* Capture lock indicator - red when at target */}
+            {gridGuidance.isAtTarget && (
+              <circle cx="50" cy="50" r="15" fill="none" stroke="#ef4444" strokeWidth="2" opacity="0.9">
+                <animate attributeName="stroke-opacity" values="1;0.3;1" dur="0.8s" repeatCount="indefinite" />
+              </circle>
+            )}
           </svg>
+          
+          {/* Directional Arrow - Large arrow pointing to target direction */}
+          {gridGuidance.direction !== 'none' && !gridGuidance.isAtTarget && (
+            <div className="absolute inset-0 z-30 flex items-center justify-center pointer-events-none">
+              <div className={`
+                relative flex flex-col items-center justify-center
+                ${gridGuidance.direction === 'north' ? 'mt-[-20%]' : ''}
+                ${gridGuidance.direction === 'south' ? 'mb-[-20%]' : ''}
+                ${gridGuidance.direction === 'east' ? 'mr-[-15%]' : ''}
+                ${gridGuidance.direction === 'west' ? 'ml-[-15%]' : ''}
+              `}>
+                {/* Arrow SVG based on direction */}
+                <svg 
+                  className={`w-20 h-20 ${gridGuidance.direction === 'north' ? 'rotate-0' : ''} ${gridGuidance.direction === 'south' ? 'rotate-180' : ''} ${gridGuidance.direction === 'east' ? 'rotate-90' : ''} ${gridGuidance.direction === 'west' ? 'rotate-[-90deg]' : ''}`}
+                  viewBox="0 0 24 24" 
+                  fill="none"
+                >
+                  <path 
+                    d="M12 4L4 14h5v6l8-10-8-10v6h5L12 4z" 
+                    fill="white" 
+                    stroke="black" 
+                    strokeWidth="1"
+                    opacity="0.9"
+                  />
+                </svg>
+                <span className="absolute -bottom-8 text-white text-xs font-bold bg-black/50 px-2 py-1 rounded">
+                  {getDirectionLabel(gridGuidance.direction)}
+                </span>
+              </div>
+            </div>
+          )}
+          
+          {/* At Target Indicator
+          {gridGuidance.isAtTarget && (
+            <div className="absolute top-1/3 left-1/2 -translate-x-1/2 z-30 pointer-events-none">
+              <div className="flex flex-col items-center">
+                <div className="bg-emerald-500/80 backdrop-blur-sm px-4 py-2 rounded-xl border border-emerald-300/50 animate-pulse">
+                  <span className="text-white text-sm font-bold">
+                    ✓ SESUAI
+                  </span>
+                </div>
+                <span className="text-emerald-200/70 text-[10px] font-medium mt-1">
+                  {formatDistance(gridGuidance.distanceToTarget)} dari target
+                </span>
+              </div>
+            </div>
+          )}
+          
+          {/* Capture Lock Indicator - Red when locked/at target */}
+          {gridGuidance.isAtTarget && (
+            <div className="absolute bottom-1/3 left-1/2 -translate-x-1/2 z-30 pointer-events-none">
+              <div className="flex items-center gap-2 bg-red-500/80 backdrop-blur-sm px-4 py-2 rounded-xl border border-red-300/50">
+                <div className="w-3 h-3 rounded-full bg-white animate-pulse" />
+                <span className="text-white text-sm font-bold">
+                  KUNCI CAPTURE AKTIF
+                </span>
+              </div>
+            </div>
+          )}
         </div>
       )}
+
+      {/* Legacy grid overlay for AI height mode - REMOVED for performance */}
+      {/* {showGridOverlay && !gridAnchor && ( */}
 
       {/* PETUNJUK KALIBRASI, muncul saat mulai mode AI */}
       {showCalibrationHint && (
@@ -763,6 +1138,67 @@ export const CameraView: React.FC<CameraViewProps> = ({
         muted 
         className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-1000 ${cameraLoading ? 'opacity-0' : 'opacity-100'}`} 
       />
+      
+      {/* Measurement Canvas Overlay */}
+      {isMeasureMode && !cameraLoading && !cameraError && (
+        <canvas
+          ref={measureCanvasRef}
+          onClick={handleMeasureCanvasClick}
+          className="absolute inset-0 w-full h-full z-10"
+          style={{ objectFit: 'cover', cursor: measurePoints.length < 2 ? 'crosshair' : 'default' }}
+        />
+      )}
+      
+      {/* Measurement Guide Text */}
+      {isMeasureMode && measureGuideText && (
+        <div className="absolute top-1/3 left-1/2 -translate-x-1/2 z-30 pointer-events-none">
+          <div className="bg-black/70 backdrop-blur-sm px-4 py-2 rounded-xl border border-white/20">
+            <span className="text-white text-sm font-bold">{measureGuideText}</span>
+          </div>
+        </div>
+      )}
+
+      {/* Measurement Result Display */}
+      {measuredHeightCm && (
+        <div className="absolute top-[calc(var(--safe-area-inset-top)+120px)] left-1/2 -translate-x-1/2 z-30 pointer-events-none">
+          <div className="bg-emerald-500/80 backdrop-blur-sm px-4 py-2 rounded-xl border border-emerald-300/50">
+            <span className="text-white text-lg font-bold">
+              {(measuredHeightCm / 100).toFixed(2)} m
+            </span>
+          </div>
+        </div>
+      )}
+      {false && showBoundingBox && !cameraLoading && !cameraError && (
+        <PlantDetectionOverlay
+          videoRef={videoRef}
+          isEnabled={false}
+          detectionInterval={5000}
+          pixelToCmRatio={0.04}
+          onDetection={(plants, heightCm) => {
+            console.log('[PlantDetection] Deteksi berhasil:', plants.length, 'tanaman', heightCm ? `${heightCm}cm` : '');
+            if (heightCm && heightCm > 0) {
+              setHeightAiEstimate({ cm: Math.round(heightCm), confidence: 90 });
+            }
+          }}
+          showHeightLabel={true}
+        />
+      )}
+      
+      {/* Bounding Box Overlay Canvas - DISABLED along with plant detection */}
+      {false && showBoundingBox && !cameraLoading && !cameraError && !isHeightAiMode && (
+        <>
+          <canvas
+            ref={boundingBoxCanvasRef}
+            className="absolute inset-0 w-full h-full pointer-events-none z-10"
+            style={{ objectFit: 'cover' }}
+          />
+          {detectionError && (
+            <div className="absolute top-0 left-0 right-0 z-50 bg-red-700/80 text-white text-center py-2 text-xs font-bold animate-pulse">
+              {detectionError}
+            </div>
+          )}
+        </>
+      )}
       
       {(cameraError || needsUserAction) && (
         <div className="z-50 flex flex-col items-center gap-6 px-10 text-center animate-in fade-in duration-500">
@@ -959,9 +1395,34 @@ export const CameraView: React.FC<CameraViewProps> = ({
               </div>
             )}
 
-            {isHeightAiMode && (
-              <div className="bg-black/15 backdrop-blur-sm px-2 py-1 rounded-lg border border-cyan-300/20 flex items-center gap-2">
-                <span className="text-[7px] font-black text-cyan-200 uppercase tracking-widest">Tinggi AI</span>
+            {isHeightAiMode && heightAiEstimate && heightAiEstimate.cm > 0 && (
+              <div className="bg-emerald-500/20 backdrop-blur-sm px-2 py-1 rounded-lg border border-emerald-300/25 flex items-center gap-2">
+                <span className={`text-[7px] font-black uppercase tracking-widest ${heightAiEstimate.cm > 0 ? 'text-emerald-300' : 'text-red-300'}`}>
+                  AI Tinggi
+                </span>
+                <span className={`text-[7px] font-bold ${heightAiEstimate.cm > 0 ? 'text-emerald-200' : 'text-red-200'}`}>
+                  : {heightAiEstimate.cm} cm
+                </span>
+              </div>
+            )}
+
+            {isHeightAiMode && (!heightAiEstimate || heightAiEstimate.cm === 0) && (
+              <div className="bg-amber-500/20 backdrop-blur-sm px-2 py-1 rounded-lg border border-amber-300/25 flex items-center gap-2">
+                <span className="text-[7px] font-black text-amber-200 uppercase tracking-widest">AI Tinggi</span>
+                <span className="text-[7px] font-bold text-amber-200">: Mengukur...</span>
+              </div>
+            )}
+
+            {!isHeightAiMode && (
+              <div className="bg-red-500/15 backdrop-blur-sm px-2 py-1 rounded-lg border border-red-300/20 flex items-center gap-2">
+                <span className="text-[7px] font-black text-red-300 uppercase tracking-widest">AI Tinggi</span>
+                <span className="text-[7px] font-bold text-red-200/70">: ---</span>
+              </div>
+            )}
+
+            {isMeasureMode && (
+              <div className="bg-black/15 backdrop-blur-sm px-2 py-1 rounded-lg border border-orange-300/20 flex items-center gap-2">
+                <span className="text-[7px] font-black text-orange-200 uppercase tracking-widest">Ukur Tinggi</span>
                 <span className="text-[7px] font-bold text-white/65">Aktif</span>
               </div>
             )}
@@ -1002,18 +1463,58 @@ export const CameraView: React.FC<CameraViewProps> = ({
 
               <div className="mt-1.5 flex items-center justify-between gap-1.5">
                 <div className="flex items-center gap-1.5">
-                  <button
-                    onClick={handleToggleHeightAiMode}
-                    className={`px-2 py-1 rounded-md border text-[7px] font-black uppercase tracking-wide active:scale-95 transition-all ${
-                      isHeightAiMode
-                        ? 'bg-cyan-500/20 border-cyan-300/35 text-cyan-100'
-                        : 'bg-black/20 border-white/15 text-white/80'
-                    }`}
-                    aria-pressed={isHeightAiMode}
-                    title="Toggle mode Tinggi AI"
-                  >
-                    AI Tinggi {isHeightAiMode ? 'ON' : 'OFF'}
-                  </button>
+                  {!isHeightAiMode && !isMeasureMode && (
+                    <>
+                      <button
+                        onClick={handleToggleHeightAiMode}
+                        className="px-2 py-1 rounded-md border text-[7px] font-black uppercase tracking-wide active:scale-95 transition-all bg-black/20 border-white/15 text-white/80"
+                        title="Toggle mode Tinggi AI"
+                      >
+                        AI Tinggi
+                      </button>
+
+                      <button
+                        onClick={handleToggleMeasureMode}
+                        className="px-2 py-1 rounded-md border text-[7px] font-black uppercase tracking-wide active:scale-95 transition-all bg-black/20 border-white/15 text-white/80"
+                        title="Mode Ukur Tinggi Manual"
+                      >
+                        Ukur
+                      </button>
+                    </>
+                  )}
+
+                  {isHeightAiMode && (
+                    <button
+                      onClick={handleToggleHeightAiMode}
+                      className="px-2 py-1 rounded-md border text-[7px] font-black uppercase tracking-wide active:scale-95 transition-all bg-cyan-500/20 border-cyan-300/35 text-cyan-100"
+                      title="Matikan mode Tinggi AI"
+                    >
+                      AI ON ✓
+                    </button>
+                  )}
+
+                  {isMeasureMode && (
+                    <button
+                      onClick={handleToggleMeasureMode}
+                      className="px-2 py-1 rounded-md border text-[7px] font-black uppercase tracking-wide active:scale-95 transition-all bg-orange-500/20 border-orange-300/35 text-orange-100"
+                      title="Matikan mode Ukur"
+                    >
+                      Ukur ON ✓
+                    </button>
+                  )}
+
+                  {(isHeightAiMode || isMeasureMode) && (
+                    <button
+                      onClick={() => {
+                        if (isHeightAiMode) handleToggleHeightAiMode();
+                        if (isMeasureMode) handleToggleMeasureMode();
+                      }}
+                      className="px-2 py-1 rounded-md border text-[7px] font-black uppercase tracking-wide active:scale-95 transition-all bg-black/20 border-white/15 text-white/80"
+                      title="Kembali ke mode Manual"
+                    >
+                      Manual
+                    </button>
+                  )}
 
                   <button
                     onClick={openHeightAiPopup}
