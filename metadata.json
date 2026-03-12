@@ -1,0 +1,8 @@
+{
+  "name": "Copy of Aplikasi Monitoring Tanaman Cerdas",
+  "description": "Aplikasi web progresif untuk monitoring tanaman dengan antarmuka kamera, analisis data, geotagging EXIF, dan ringkasan kesehatan berbasis AI. Tangkap gambar, catat data, visualisasikan di peta, dan ekspor laporan dengan mudah.",
+  "requestFramePermissions": [
+    "camera",
+    "geolocation"
+  ]
+}

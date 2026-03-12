@@ -1,0 +1,11 @@
+name = "montana-ecology-summary"
+main = "src/index.ts"
+compatibility_date = "2026-03-07"
+
+[vars]
+# Set your frontend origin here (can be overridden per environment)
+ALLOWED_ORIGIN = "https://camera.montana-tech.info"
+
+# Secrets (set using wrangler secret put)
+# DEEPSEEK_API_KEY
+# ANALYSIS_PASSWORD
