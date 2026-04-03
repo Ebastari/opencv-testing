@@ -26,7 +26,7 @@ import {
 
 interface PlantDetectionOverlayProps {
   /** Reference ke elemen video */
-  videoRef: React.RefObject<HTMLVideoElement>;
+  videoRef: React.RefObject<HTMLVideoElement | null>;
   /** Apakah deteksi diaktifkan */
   isEnabled?: boolean;
   /** Interval deteksi dalam milidetik */
@@ -69,7 +69,7 @@ export const PlantDetectionOverlay: React.FC<PlantDetectionOverlayProps> = ({
   const [detectedPlants, setDetectedPlants] = useState<DetectedPlant[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [lastDetectionTime, setLastDetectionTime] = useState<number>(0);
-  const animationFrameRef = useRef<number>();
+  const animationFrameRef = useRef<number | null>(null);
 
   // Fungsi untuk menggambar bounding box di canvas
   const drawBoundingBoxes = useCallback((
@@ -246,7 +246,7 @@ export const PlantDetectionOverlay: React.FC<PlantDetectionOverlayProps> = ({
     return () => {
       clearTimeout(timeoutId);
       clearInterval(intervalId);
-      if (animationFrameRef.current) {
+      if (animationFrameRef.current !== null) {
         cancelAnimationFrame(animationFrameRef.current);
       }
     };

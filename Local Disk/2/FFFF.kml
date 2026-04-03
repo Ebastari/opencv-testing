@@ -1,9 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<kml><GroundOverlay><name>FFFF.tif</name><color>88ffffff</color><Icon>
-<href>FFFF.tif</href>
-<viewBoundScale>0.75</viewBoundScale></Icon><LatLonBox>
-<north>-2.63218749387197</north>
-<south>-2.66356798515752</south>
-<east>116.317362785339</east>
-<west>116.252818107605</west>
-</LatLonBox></GroundOverlay></kml>

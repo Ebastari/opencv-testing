@@ -1,27 +1,42 @@
-# AI Height Detection Debug - Step-by-Step Implementation Tracker
-Status: Phase 2 COMPLETE
+# TODO Steps: Fix Google Apps Script DriveApp Access Denied & Unstuck Sync Queue
 
-## Phase 1: Fix Compile (Critical - Vite Parse Error)
-- [x] Create this TODO-steps.md
-- [✅] **FIX SYNTAX**: Removed duplicate useEffect for debug visualization in CameraView.tsx
-- [✅] Cleaned malformed JSX/comments around AI debug sections
-- [✅] Test: `npm run dev` → Vite running on http://localhost:3003/ (no parse errors)
+## 1. ✅ Fix Apps Script (Current Step)
+**Goal**: Graceful error handling so metadata saves even if Drive fails.
 
-## Phase 2: OpenCV Robustness ✓
-- [✅] Reduced MIN_AREA=100 (Phase 3 preview)
-- [✅] Enhanced loadOpenCV(): timeout/retry logic
-- [✅] Added `isOpenCVReady()` helper
+**Changes**:
+- Update `saveImageAndReturnUrl_()` with better try-catch + empty link fallback.
+- Improved logging for permission/scope issues.
 
-## Phase 3: Debug & Improvements ✓
-- [✅] Reduced MIN_AREA=100 in plantDetection.ts 
-- [ ] Add console logs: mask area, bbox, ratio, cm values
-- [ ] Enhance failure overlay (IconAlertCircle + messages)
+**After edit**:
+```
+1. Copy updated google_apps_script.gs
+2. script.google.com → Paste → Save → Deploy new Web App version
+3. Test POST with photo → Check Sheet (data saves?) + Exec logs
+```
 
-## Phase 4: Test
-- [ ] Online/offline toggle
-- [ ] Dim light/small plant/no plant tests
-- [ ] Update TODO.md progress
-- [ ] attempt_completion
+## 2. ⏳ Clear Stuck Sync Queue
+```
+Browser DevTools > Console:
+import { retryFailedSyncItems } from './services/dbService.js';
+retryFailedSyncItems().then(count => console.log(`${count} items retried`));
+```
 
-**Next: After Phase 1 success → Phase 2**
+## 3. 🔧 Enable Drive API Scopes (Permanent Fix)
+```
+script.google.com → Project Settings → Scopes → Check:
+✅ https://www.googleapis.com/auth/drive
+Or: Deploy → New deployment → Authorize new scopes
+```
+
+## 4. 🧪 Test Full Flow
+```
+App: Add entry offline → Online → Watch SyncStatusIndicator
+Expected: Green "Tersinkron" (0 pending)
+```
+
+## 5. 🚀 Deploy & Monitor
+- Update app `REACT_APP_API_URL` if Web App URL changed
+- Check Exec logs: script.google.com → Executions
+
+**Progress**: ✅ Step 1 | [ ] Step 2 | [ ] Step 3 | [ ] Step 4 | [ ] Step 5
 

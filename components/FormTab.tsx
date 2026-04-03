@@ -5,9 +5,13 @@ import { FormState } from '../types';
 interface FormTabProps {
   formState: FormState;
   onFormStateChange: React.Dispatch<React.SetStateAction<FormState>>;
+  plantTypes: string[];
+  onRegisterPlantType: (value: string) => void;
 }
 
-export const FormTab: React.FC<FormTabProps> = ({ formState, onFormStateChange }) => {
+const normalizePlantType = (value: string): string => value.trim().replace(/\s+/g, ' ');
+
+export const FormTab: React.FC<FormTabProps> = ({ formState, onFormStateChange, plantTypes, onRegisterPlantType }) => {
   const handleFormChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
     if (e.target.type === 'number') {
@@ -35,6 +39,25 @@ export const FormTab: React.FC<FormTabProps> = ({ formState, onFormStateChange }
       ...prev,
       [name]: value,
     }));
+  };
+
+  const normalizedPlantType = normalizePlantType(formState.jenis);
+  const isCustomPlantType =
+    normalizedPlantType.length > 0 &&
+    !plantTypes.some((type) => type.toLocaleLowerCase() === normalizedPlantType.toLocaleLowerCase());
+
+  const handlePlantTypeBlur = () => {
+    onRegisterPlantType(formState.jenis);
+  };
+
+  const handlePlantTypeKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key !== 'Enter') {
+      return;
+    }
+
+    e.preventDefault();
+    onRegisterPlantType(formState.jenis);
+    e.currentTarget.blur();
   };
 
   return (
@@ -117,14 +140,29 @@ export const FormTab: React.FC<FormTabProps> = ({ formState, onFormStateChange }
         
         <div className="space-y-2 mb-6">
           <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-1">Jenis Bibit</label>
-          <input 
-            type="text" 
-            name="jenis" 
-            value={formState.jenis} 
-            onChange={handleFormChange} 
-            className="w-full bg-slate-50 border border-slate-100 rounded-2xl p-4 text-sm font-bold text-slate-700 focus:ring-4 focus:ring-emerald-500/10 focus:border-emerald-500 outline-none transition-all shadow-sm" 
-            placeholder="Ketik jenis bibit..."
-          />
+          <div className="space-y-2">
+            <input 
+              type="text" 
+              name="jenis" 
+              list="plant-type-suggestions"
+              value={formState.jenis} 
+              onChange={handleFormChange}
+              onBlur={handlePlantTypeBlur}
+              onKeyDown={handlePlantTypeKeyDown}
+              className="w-full bg-slate-50 border border-slate-100 rounded-2xl p-4 text-sm font-bold text-slate-700 focus:ring-4 focus:ring-emerald-500/10 focus:border-emerald-500 outline-none transition-all shadow-sm" 
+              placeholder="Ketik jenis bibit..."
+            />
+            <datalist id="plant-type-suggestions">
+              {plantTypes.map((plantType) => (
+                <option key={plantType} value={plantType} />
+              ))}
+            </datalist>
+            <p className={`px-1 text-[10px] font-bold ${isCustomPlantType ? 'text-emerald-600' : 'text-slate-400'}`}>
+              {isCustomPlantType
+                ? 'Bibit baru ini akan otomatis ditambahkan ke tombol tanaman di panel kamera.'
+                : 'Pilih dari daftar atau ketik bibit baru, lalu keluar dari kolom untuk menyimpan.'}
+            </p>
+          </div>
         </div>
 
         <div className="grid grid-cols-2 gap-4">

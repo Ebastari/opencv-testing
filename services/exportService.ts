@@ -60,6 +60,252 @@ const escapeCSV = (val: any): string => {
   return str;
 };
 
+const SPREADSHEET_HEADERS = [
+  'ID',
+  'Tanggal',
+  'Lokasi',
+  'Pekerjaan',
+  'Tinggi',
+  'Koordinat',
+  'Koordinat_Asli',
+  'Koordinat_Revisi',
+  'Y',
+  'X',
+  'Tanaman',
+  'Tahun Tanam',
+  'Pengawas',
+  'Vendor',
+  'Tim',
+  'Link Drive',
+  'Gambar',
+  'Gambar_Nama_File',
+  'FileID',
+  'No Pohon',
+  'Kesehatan',
+  'AI_Kesehatan',
+  'AI_Confidence',
+  'AI_Deskripsi',
+  'HCV_Input',
+  'HCV_Deskripsi',
+  'Description',
+  'GPS_Quality',
+  'GPS_Accuracy_M',
+  'Status_Verifikasi',
+  'poop',
+  'Status_Duplikat',
+  'Eco_BiomassaKg',
+  'Eco_KarbonKgC',
+  'Eco_JarakTerdekatM',
+  'Eco_SesuaiJarak',
+  'Eco_KepadatanHa',
+  'Eco_CCI',
+  'Eco_CCI_Grade',
+  'Eco_AreaHa',
+  'Eco_JarakRata2M',
+  'Eco_JarakStdM',
+  'Eco_KesesuaianJarakPct',
+  'Eco_GpsMedianM',
+  'Eco_UpdatedAt',
+] as const;
+
+type SpreadsheetBackupStatus = 'downloaded' | 'shared' | 'manual_required';
+
+interface SpreadsheetBackupOptions {
+  fileName?: string;
+  preferShareSheet?: boolean;
+}
+
+interface SpreadsheetBackupResult {
+  status: SpreadsheetBackupStatus;
+  fileName: string;
+  total: number;
+}
+
+const isIOSFamilyDevice = (): boolean => {
+  const ua = navigator.userAgent || '';
+  const isClassicIOS = /iPhone|iPad|iPod/i.test(ua);
+  const isIPadDesktopMode = navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1;
+  return isClassicIOS || isIPadDesktopMode;
+};
+
+const formatCoordinateValue = (value: number | undefined): string => {
+  if (!Number.isFinite(value)) {
+    return '';
+  }
+
+  return String(value).replace('.', ',');
+};
+
+const formatFixedNumber = (value: number | undefined, digits: number): string => {
+  if (!Number.isFinite(value)) {
+    return '';
+  }
+
+  return Number(value).toFixed(digits);
+};
+
+const buildDriveFileName = (entry: PlantEntry): string => `Gambar Montana (${entry.id}).jpg`;
+
+const buildDrivePath = (entry: PlantEntry): string => `Montana V2_Images/${buildDriveFileName(entry)}`;
+
+const extractDriveFileId = (linkDrive: string | undefined): string => {
+  const value = String(linkDrive || '').trim();
+  if (!value) {
+    return '';
+  }
+
+  const patterns = [/\/d\/([^/]+)/i, /[?&]id=([^&]+)/i];
+  for (const pattern of patterns) {
+    const match = value.match(pattern);
+    if (match?.[1]) {
+      return match[1];
+    }
+  }
+
+  return '';
+};
+
+const buildPoopHtml = (linkDrive: string | undefined): string => {
+  const value = String(linkDrive || '').trim();
+  if (!value) {
+    return '';
+  }
+
+  return `<a href="${value}" target="_blank" rel="noopener noreferrer">Buka Foto</a>`;
+};
+
+const resolveMainCoordinate = (entry: PlantEntry): string => {
+  const revised = String(entry.revisedKoordinat || '').trim();
+  if (entry.snappedToGrid && revised) {
+    return revised;
+  }
+
+  return String(entry.koordinat || entry.rawKoordinat || '').trim();
+};
+
+const resolveOriginalCoordinate = (entry: PlantEntry): string => {
+  return String(entry.rawKoordinat || entry.koordinat || '').trim();
+};
+
+const resolveRevisedCoordinate = (entry: PlantEntry): string => {
+  if (!entry.snappedToGrid) {
+    return '';
+  }
+
+  return String(entry.revisedKoordinat || '').trim();
+};
+
+const toSpreadsheetRow = (entry: PlantEntry): string[] => {
+  const linkDrive = String(entry.linkDrive || '').trim();
+
+  return [
+    entry.id,
+    entry.tanggal || new Date(entry.timestamp).toLocaleString('id-ID'),
+    entry.lokasi,
+    entry.pekerjaan,
+    entry.tinggi,
+    resolveMainCoordinate(entry),
+    resolveOriginalCoordinate(entry),
+    resolveRevisedCoordinate(entry),
+    formatCoordinateValue(entry.y),
+    formatCoordinateValue(entry.x),
+    entry.tanaman,
+    entry.tahunTanam,
+    entry.pengawas,
+    entry.vendor,
+    entry.tim,
+    linkDrive,
+    buildDrivePath(entry),
+    buildDriveFileName(entry),
+    extractDriveFileId(linkDrive),
+    entry.noPohon,
+    entry.kesehatan,
+    entry.aiKesehatan || '',
+    formatFixedNumber(entry.aiConfidence, 2),
+    entry.aiDeskripsi || '',
+    formatFixedNumber(entry.hcvInput, 2),
+    entry.hcvDescription || '',
+    entry.description || '',
+    entry.gpsQualityAtCapture || '',
+    formatFixedNumber(entry.gpsAccuracyAtCapture, 1),
+    entry.statusVerifikasi || '',
+    buildPoopHtml(linkDrive),
+    entry.statusDuplikat || 'UNIK',
+    '',
+    '',
+    '',
+    '',
+    '',
+    '',
+    '',
+    '',
+    '',
+    '',
+    '',
+    '',
+    '',
+  ].map(escapeCSV);
+};
+
+export const getSpreadsheetBackupFileName = (date: Date = new Date()): string => {
+  const timestamp = date.toISOString().slice(0, 19).replace(/[T:]/g, '-');
+  return `backup_monitoring_spreadsheet_${timestamp}.csv`;
+};
+
+export const exportSpreadsheetBackup = async (
+  entries: PlantEntry[],
+  options: SpreadsheetBackupOptions = {},
+): Promise<SpreadsheetBackupResult> => {
+  const fileName = options.fileName || getSpreadsheetBackupFileName();
+  const rows = entries.map((entry) => toSpreadsheetRow(entry));
+  const csvContent = ['\uFEFF' + SPREADSHEET_HEADERS.join(','), ...rows.map((row) => row.join(','))].join('\n');
+  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+
+  if (options.preferShareSheet && isIOSFamilyDevice() && typeof navigator.share === 'function') {
+    try {
+      const file = new File([blob], fileName, { type: 'text/csv;charset=utf-8;' });
+      const canShare = typeof navigator.canShare === 'function' && navigator.canShare({ files: [file] });
+
+      if (canShare) {
+        await navigator.share({
+          title: fileName,
+          text: 'Backup spreadsheet monitoring tanaman',
+          files: [file],
+        });
+
+        return {
+          status: 'shared',
+          fileName,
+          total: entries.length,
+        };
+      }
+
+      return {
+        status: 'manual_required',
+        fileName,
+        total: entries.length,
+      };
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        return {
+          status: 'manual_required',
+          fileName,
+          total: entries.length,
+        };
+      }
+
+      throw error;
+    }
+  }
+
+  saveAs(blob, fileName);
+  return {
+    status: 'downloaded',
+    fileName,
+    total: entries.length,
+  };
+};
+
 export const exportToCSV = (entries: PlantEntry[]) => {
   const headers = ['ID', 'Timestamp', 'Tinggi (cm)', 'Jenis', 'Kesehatan', 'Lokasi', 'Tahun Tanam', 'GPS Latitude', 'GPS Longitude', 'GPS Accuracy'];
   // FIX: Use 'tanaman' instead of 'jenis', 'tahunTanam' instead of 'tahun', and correctly access timestamp and gps.

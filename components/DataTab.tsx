@@ -7,7 +7,7 @@ interface DataTabProps {
   totalEntriesCount: number;
   pendingCount: number;
   isOnline: boolean;
-  onSyncPending: () => Promise<void>;
+  onSyncPending: (options?: { background?: boolean; force?: boolean }) => Promise<void>;
 }
 
 // Menambah jumlah item per halaman karena optimasi lazy load gambar sudah diterapkan
@@ -69,7 +69,7 @@ export const DataTab: React.FC<DataTabProps> = ({ entries, totalEntriesCount, pe
   const handleSync = async () => {
     setIsSyncing(true);
     try {
-      await onSyncPending();
+      await onSyncPending({ force: true });
     } finally {
       setIsSyncing(false);
     }

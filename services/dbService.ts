@@ -1,11 +1,13 @@
 
-import { PlantEntry } from '../types';
+import { PlantEntry, CloudTree, CloudEcologyMetrics } from '../types';
 
 const DB_NAME = 'MonitoringTanamanDB';
-const DB_VERSION = 3;
+const DB_VERSION = 4; // Bumped for cloud stores
 const STORE_NAME = 'entries';
 const PHOTO_ANALYSIS_STORE = 'photo_analysis_cache';
 const SYNC_QUEUE_STORE = 'sync_queue';
+export const CLOUD_TREES_STORE = 'cloud_trees';
+export const CLOUD_ECOLOGY_STORE = 'cloud_ecology';
 
 // Sync queue item interface for offline sync management
 interface SyncQueueItem {
@@ -97,6 +99,17 @@ export const initDB = (): Promise<IDBDatabase> => {
         syncStore.createIndex('status', 'status', { unique: false });
         syncStore.createIndex('entryId', 'entryId', { unique: false });
         syncStore.createIndex('createdAt', 'createdAt', { unique: false });
+      }
+
+      // Cloud/GAS data stores
+      if (!db.objectStoreNames.contains(CLOUD_TREES_STORE)) {
+        const store = db.createObjectStore(CLOUD_TREES_STORE, { keyPath: 'cloudId' });
+        store.createIndex('syncedAt', 'syncedAt', { unique: false });
+      }
+
+      if (!db.objectStoreNames.contains(CLOUD_ECOLOGY_STORE)) {
+        const store = db.createObjectStore(CLOUD_ECOLOGY_STORE, { keyPath: 'treeId' });
+        store.createIndex('analysis_timestamp', 'analysis_timestamp', { unique: false });
       }
     };
 

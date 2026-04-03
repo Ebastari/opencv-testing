@@ -1,27 +1,34 @@
-# AI Height Detection Fix - Approved Plan Implementation Tracker
+# GAS Cloud Ecology Integration Plan
 
-Status: Starting implementation...
+## Steps to Complete:
 
-## Breakdown Steps (sequential)
+### 1. [✅] Create services/cloudService.ts
+- ✅ Implement GAS API calls: getTreeList(), getEcologyAnalysis()
+- ✅ Handle retry logic for large responses
+- ☐ Add caching (next iteration)
 
-### Phase A: Preparation (Self-Host OpenCV)
-- [x] 1. Download OpenCV.js to `public/opencv.js` (offline/reliable loading) - CDN blocked by Cloudflare, skip self-host for now; enhance loader logic instead
-- [x] 2. Update `ecology/plantDetection.ts`: loadOpenCV() prioritize self-host → CDN (skip self-host), add OpenCVLoadState enum & enhanced retry/console progress
+### 2. [✅] Update types.ts
+- Add `CloudTree`, `CloudEcologyMetrics` interfaces
+- Extend existing types for cloud data compatibility
 
-### Phase B: Core Detection Fixes
-- [x] 3. Add `calibratePixelToCmRatio(inputSize: number)` → dynamic (base 0.04 * scale to assume avg 200cm plant fills 80px on input)
-- [x] 4. Enhance `detectPlantHeightOpenCV()`: Full logs (HSV/contours histogram/mask area), extended Result interface (maskPixelCount/contourCount/contourAreas)
-- [ ] 4.1 Enhance `loadOpenCV()`: Better retry logic, status enum, console progress
-- [ ] 5. Update CameraView.tsx AI loop: Use calibrated ratio, log full result, fix interval/state sync, enhance failure reasons
+### 3. [✅] Update services/dbService.ts  
+- ✅ Add cloud stores (cloud_trees, cloud_ecology)
+- ✅ Export store constants, cloudDbService.ts with methods
+- ✅ Hybrid mergeLocalCloudData()
 
-### Phase C: Validation & UI
-- [ ] 6. Add top debug panel in CameraView: Live contours/maxArea/ratio/brightness
-- [ ] 7. Polish failure overlays/toasts (retry btn, specific msgs)
-- [ ] 8. Test: `npm run dev`, AI debug on/offline/lowlight/small-plant
+### 4. [ ] Update components/AnalyticsTab.tsx
+- Add local/cloud toggle switch
+- Display GAS ecology metrics: density (/Ha), CCI, total biomass (Kg)
+- Loading/error states for cloud data
+- Compare local vs cloud metrics
 
-### Phase D: Completion
-- [ ] 9. Update TODO.md/TODO-steps.md progress
-- [ ] 10. `attempt_completion` with demo cmd
+### 5. [ ] Update services/syncService.ts
+- Integrate with uploadService for GAS sync
+- Bidirectional sync: local → GAS, GAS → local
+- Conflict resolution for ecology data
 
-**Current: Phase A → B → C → D. One step/tool at a time.**
+## Follow-up Steps:
+- Test GAS endpoints with real data (✅ Terminal shows working ?list)
+- Verify AnalyticsTab displays cloud ecology correctly
+- End-to-end sync test
 

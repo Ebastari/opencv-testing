@@ -147,13 +147,6 @@ export const Compass: React.FC = () => {
         <div className="w-1.5 h-4 bg-red-500 rounded-full shadow-[0_0_15px_rgba(239,68,68,0.8)]" />
         <div className="w-0 h-0 border-l-[3px] border-l-transparent border-r-[3px] border-r-transparent border-t-[4px] border-t-red-500 -mt-1" />
       </div>
-
-      {/* Calibration message if no heading */}
-      {!isActive && (
-        <div className="absolute -bottom-8 whitespace-nowrap text-[7px] font-black text-white/40 uppercase tracking-widest animate-pulse">
-          Calibrating Sensor...
-        </div>
-      )}
     </div>
   );
 };

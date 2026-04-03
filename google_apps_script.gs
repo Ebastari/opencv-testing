@@ -2,7 +2,7 @@
  * GOOGLE APPS SCRIPT: MONITORING TANAMAN CERDAS (V5 CLEAN)
  *
  * Fitur utama:
- * - API GET: list data / analisis ringkas
+ * - API GET: list data / analisis ringkas / hapus data (delete)
  * - API POST: simpan data / hapus data
  * - Auto header default sesuai format monitoring
  * - Auto normalisasi koordinat (koma/titik)
@@ -15,6 +15,7 @@
 const SHEET_NAME = 'Data Monitoring';
 const ECO_SUMMARY_SHEET_NAME = 'Eco Summary';
 const FOLDER_NAME = 'Montana V2_Images';
+const FOLDER_ID = '11kEGxDIHpXJxQmv2GJVYCXvffg5q1hWD';
 const IDEAL_DENSITY_PER_HA = 625;
 const IDEAL_SPACING_M = 4;
 
@@ -33,23 +34,68 @@ const DEFAULT_HEADERS = [
   'Tahun Tanam',
   'Pengawas',
   'Vendor',
+  'Tim',
   'Link Drive',
+  'Gambar',
+  'Gambar_Nama_File',
+  'FileID',
   'No Pohon',
   'Kesehatan',
   'AI_Kesehatan',
   'AI_Confidence',
   'AI_Deskripsi',
   'HCV_Input',
+  'HCV_Deskripsi',
+  'Description',
+  'GPS_Quality',
+  'GPS_Accuracy_M',
+  'Status_Verifikasi',
   'poop',
   'Status_Duplikat',
   'Eco_BiomassaKg',
   'Eco_KarbonKgC',
-  ];
+  'Eco_JarakTerdekatM',
+  'Eco_SesuaiJarak',
+  'Eco_KepadatanHa',
+  'Eco_CCI',
+  'Eco_CCI_Grade',
+  'Eco_AreaHa',
+  'Eco_JarakRata2M',
+  'Eco_JarakStdM',
+  'Eco_KesesuaianJarakPct',
+  'Eco_GpsMedianM',
+  'Eco_UpdatedAt',
+];
 
 function doGet(e) {
   try {
     const action = getParam_(e, 'action', 'list').toLowerCase();
     const sheet = ensureMonitoringSheet_();
+
+    if (action === 'drive_test') {
+      return jsonResponse_(inspectDriveAccess_());
+    }
+
+    if (action === 'delete') {
+      const target = String(
+        getParam_(e, 'pohonId', '') || getParam_(e, 'id', ''),
+      ).trim();
+
+      if (!target) {
+        return jsonResponse_({
+          status: 'error',
+          message: 'Parameter pohonId/id wajib diisi untuk hapus.',
+          deleted: 0,
+        });
+      }
+
+      const deleted = deleteByIdOrTreeNo_(sheet, target);
+      return jsonResponse_(
+        deleted
+          ? { status: 'success', message: 'Data dihapus.', deletedId: target, deleted: 1 }
+          : { status: 'error', message: 'ID/No Pohon tidak ditemukan.', deleted: 0 },
+      );
+    }
 
     if (action === 'analysis') {
       return jsonResponse_(buildAnalysis_(sheet));
@@ -67,15 +113,9 @@ function doGet(e) {
       return jsonResponse_(readSheetAsObjectsPaged_(sheet, limit, offset, order));
     }
 
+    // List default dikembalikan sebagai array langsung agar kompatibel frontend lama/new.
     const data = readSheetAsObjects_(sheet);
-    return jsonResponse_({
-      status: 'success',
-      data: data,
-      total: data.length,
-      limit: 0,
-      offset: 0,
-      order: 'asc',
-    });
+    return jsonResponse_(data);
   } catch (error) {
     return jsonResponse_({ status: 'error', message: String(error) });
   }
@@ -86,6 +126,12 @@ function doPost(e) {
     const body = parsePostBody_(e);
     const action = String(body.action || 'save').toLowerCase();
     const sheet = ensureMonitoringSheet_();
+
+    logServerEvent_('doPost.received', {
+      action: action,
+      id: body && (body.ID || body.id || ''),
+      hasRawBase64: Boolean(body && (body.RawBase64 || body.Base64 || '')),
+    });
 
     if (action === 'delete') {
       const target = String(body.pohonId || body.id || '').trim();
@@ -117,16 +163,27 @@ function doPost(e) {
     }
 
     const saved = appendMonitoringRow_(sheet, body);
+    if (!saved || !saved.persisted || saved.rowNumber <= 1) {
+      throw new Error('Data gagal diverifikasi di spreadsheet setelah proses simpan.');
+    }
+
     return jsonResponse_({
       status: 'success',
       message: saved.updated ? 'Data diperbarui (ID sudah ada).' : 'Data tersimpan.',
       id: saved.id,
+      rowNumber: saved.rowNumber,
       statusDuplikat: saved.statusDuplikat,
       noPohon: saved.noPohon,
       url: saved.linkDrive,
+      driveStatus: saved.driveStatus,
+      driveMessage: saved.driveMessage,
       updated: Boolean(saved.updated),
     });
   } catch (error) {
+    logServerEvent_('doPost.error', {
+      message: error && error.message ? error.message : String(error),
+      stack: error && error.stack ? error.stack : '',
+    });
     return jsonResponse_({ status: 'error', message: String(error) });
   }
 }
@@ -183,15 +240,63 @@ function styleHeader_(sheet, width) {
     .setBackground('#f3f3f3');
 }
 
+function getMonitoringSheet() {
+  return ensureMonitoringSheet_();
+}
+
+function getHeadersAndMap(sheet) {
+  const targetSheet = sheet || ensureMonitoringSheet_();
+  const lastCol = targetSheet.getLastColumn();
+  const headers = lastCol > 0
+    ? targetSheet.getRange(1, 1, 1, lastCol).getValues()[0].map((h) => String(h || '').trim())
+    : [];
+
+  return {
+    headers: headers,
+    colMap: buildHeaderIndex_(headers),
+  };
+}
+
+function ensureHeader(sheet, headers, colMap, name) {
+  const targetSheet = sheet || ensureMonitoringSheet_();
+  const targetHeaders = headers || [];
+  const targetMap = colMap || buildHeaderIndex_(targetHeaders);
+  const normalizedName = String(name || '').trim();
+
+  if (!normalizedName) {
+    throw new Error('Nama header wajib diisi.');
+  }
+
+  if (targetMap[normalizedName] !== undefined) {
+    return targetMap[normalizedName];
+  }
+
+  const newIndex = targetSheet.getLastColumn();
+  targetSheet.getRange(1, newIndex + 1).setValue(normalizedName);
+  targetHeaders.push(normalizedName);
+  targetMap[normalizedName] = newIndex;
+  styleHeader_(targetSheet, targetSheet.getLastColumn());
+  return newIndex;
+}
+
 function parsePostBody_(e) {
   if (!e || !e.postData || !e.postData.contents) {
     return {};
   }
-  const raw = e.postData.contents;
+  const raw = String(e.postData.contents || '').replace(/^\uFEFF/, '').trim();
   if (!raw) {
     return {};
   }
-  return JSON.parse(raw);
+
+  try {
+    return JSON.parse(raw);
+  } catch (jsonError) {
+    try {
+      return parseQueryStringBody_(raw);
+    } catch (fallbackError) {
+      throw new Error('Body POST tidak valid. JSON/querystring gagal diparse. Cuplikan: ' + raw.slice(0, 180));
+    }
+  }
 }
 
 function readSheetAsObjects_(sheet) {
@@ -287,6 +392,10 @@ function appendMonitoringRow_(sheet, payload) {
   const headerIndex = buildHeaderIndex_(headers);
 
   const id = String(payload.ID || payload.id || generateId_()).trim();
+  const existingRowNumber = findRowById_(sheet, headerIndex, id);
+  const existingRow = existingRowNumber > 1
+    ? sheet.getRange(existingRowNumber, 1, 1, headers.length).getValues()[0]
+    : null;
   const tanggal = normalizeTanggal_(payload.Tanggal || payload.tanggal);
   const pekerjaan = String(payload.Pekerjaan || payload.pekerjaan || '').trim();
   const tinggi = toNumberOrBlank_(payload.Tinggi ?? payload.tinggi);
@@ -294,12 +403,18 @@ function appendMonitoringRow_(sheet, payload) {
   const tahunTanam = String(payload['Tahun Tanam'] || payload.tahunTanam || '').trim();
   const pengawas = String(payload.Pengawas || payload.pengawas || '').trim();
   const vendor = String(payload.Vendor || payload.vendor || '').trim();
+  const tim = String(payload.Tim || payload.tim || getByHeader_(existingRow, headerIndex, 'Tim') || '').trim();
   const kesehatan = normalizeHealth_(payload.Kesehatan || payload.kesehatan || 'Sehat');
   const aiKesehatanRaw = String(payload.AI_Kesehatan || payload.aiKesehatan || '').trim();
   const aiKesehatan = aiKesehatanRaw ? normalizeHealth_(aiKesehatanRaw) : '';
   const aiConfidence = toNumberOrBlank_(payload.AI_Confidence ?? payload.aiConfidence);
   const aiDeskripsiRaw = String(payload.AI_Deskripsi || payload.aiDeskripsi || '').trim();
   const hcvInputRaw = toNumberOrBlank_(payload.HCV_Input ?? payload.hcvInput);
+  const hcvDescription = String(payload.HCV_Deskripsi || payload.hcvDescription || getByHeader_(existingRow, headerIndex, 'HCV_Deskripsi') || '').trim();
+  const description = String(payload.Description || payload.description || getByHeader_(existingRow, headerIndex, 'Description') || '').trim();
+  const gpsQuality = String(payload.GPS_Quality || payload.gpsQuality || getByHeader_(existingRow, headerIndex, 'GPS_Quality') || '').trim();
+  const gpsAccuracy = toNumberOrBlank_(payload.GPS_Accuracy_M ?? payload.gpsAccuracy ?? getByHeader_(existingRow, headerIndex, 'GPS_Accuracy_M'));
+  const statusVerifikasi = String(payload.Status_Verifikasi || payload.statusVerifikasi || getByHeader_(existingRow, headerIndex, 'Status_Verifikasi') || '').trim();
 
   // Server-side fallback: hitung HCV jika klien tidak mengirim
   const hcvInput = (hcvInputRaw !== '' && hcvInputRaw !== null && hcvInputRaw !== undefined)
@@ -369,13 +484,15 @@ function appendMonitoringRow_(sheet, payload) {
       ? originalFixed.lat
       : (Number.isFinite(coords.lat) ? coords.lat : '');
 
-  const linkDrive = saveImageAndReturnUrl_(payload, id) || String(payload['Link Drive'] || payload.linkDrive || '').trim();
+  const gambarPath = buildImagePath_(payload, id, getByHeader_(existingRow, headerIndex, 'Gambar'));
+  const gambarNamaFile = getFileNameFromPath_(gambarPath);
+  const driveResult = saveImageAndReturnUrl_(payload, id, gambarPath);
+  const linkDrive = String(driveResult.url || payload['Link Drive'] || payload.linkDrive || getByHeader_(existingRow, headerIndex, 'Link Drive') || '').trim();
+  const fileId = extractDriveFileId_(linkDrive);
   const poop = String(payload.poop || buildPoopHtml_(linkDrive)).trim();
 
-  const statusDuplikat = String(payload.Status_Duplikat || payload.statusDuplikat || '').trim() ||
-    detectDuplicateStatus_(sheet, id, tanggal, koordinat);
-
-  let noPohon = String(payload['No Pohon'] || payload.noPohon || '').trim();
+  let noPohon = String(payload['No Pohon'] || payload.noPohon || getByHeader_(existingRow, headerIndex, 'No Pohon') || '').trim();
+  const statusDuplikat = detectDuplicateStatus_(sheet, id, tanggal, koordinat, noPohon);
   if (!noPohon && statusDuplikat === 'UNIK') {
     noPohon = String(getNextTreeNumber_(sheet));
   }
@@ -395,13 +512,22 @@ function appendMonitoringRow_(sheet, payload) {
   setByHeader_(row, headerIndex, 'Tahun Tanam', tahunTanam);
   setByHeader_(row, headerIndex, 'Pengawas', pengawas);
   setByHeader_(row, headerIndex, 'Vendor', vendor);
+  setByHeader_(row, headerIndex, 'Tim', tim);
   setByHeader_(row, headerIndex, 'Link Drive', linkDrive);
+  setByHeader_(row, headerIndex, 'Gambar', gambarPath);
+  setByHeader_(row, headerIndex, 'Gambar_Nama_File', gambarNamaFile);
+  setByHeader_(row, headerIndex, 'FileID', fileId);
   setByHeader_(row, headerIndex, 'No Pohon', noPohon);
   setByHeader_(row, headerIndex, 'Kesehatan', kesehatan);
   setByHeader_(row, headerIndex, 'AI_Kesehatan', aiKesehatan);
   setByHeader_(row, headerIndex, 'AI_Confidence', aiConfidence);
   setByHeader_(row, headerIndex, 'AI_Deskripsi', aiDeskripsi);
   setByHeader_(row, headerIndex, 'HCV_Input', hcvInput);
+  setByHeader_(row, headerIndex, 'HCV_Deskripsi', hcvDescription);
+  setByHeader_(row, headerIndex, 'Description', description);
+  setByHeader_(row, headerIndex, 'GPS_Quality', gpsQuality);
+  setByHeader_(row, headerIndex, 'GPS_Accuracy_M', gpsAccuracy);
+  setByHeader_(row, headerIndex, 'Status_Verifikasi', statusVerifikasi);
   setByHeader_(row, headerIndex, 'poop', poop);
   setByHeader_(row, headerIndex, 'Status_Duplikat', statusDuplikat);
 
@@ -412,18 +538,34 @@ function appendMonitoringRow_(sheet, payload) {
   setByHeader_(row, headerIndex, 'Eco_KarbonKgC', karbonKg);
   setByHeader_(row, headerIndex, 'Eco_UpdatedAt', new Date().toISOString());
 
-  const existingRowNumber = findRowById_(sheet, headerIndex, id);
   if (existingRowNumber > 1) {
     sheet.getRange(existingRowNumber, 1, 1, headers.length).setValues([row]);
   } else {
     sheet.appendRow(row);
   }
 
+  SpreadsheetApp.flush();
+  const persistedRowNumber = findRowById_(sheet, headerIndex, id);
+  const persisted = persistedRowNumber > 1;
+
+  logServerEvent_('appendMonitoringRow.saved', {
+    id: id,
+    rowNumber: persistedRowNumber,
+    persisted: persisted,
+    updated: existingRowNumber > 1,
+    driveStatus: driveResult.status,
+    driveMessage: driveResult.message,
+  });
+
   return {
     id: id,
     noPohon: noPohon,
     statusDuplikat: statusDuplikat,
     linkDrive: linkDrive,
+    driveStatus: driveResult.status,
+    driveMessage: driveResult.message,
+    rowNumber: persistedRowNumber,
+    persisted: persisted,
     updated: existingRowNumber > 1,
   };
 }
@@ -809,10 +951,13 @@ function refreshDuplicateAndTreeNumber_() {
   let duplikat = 0;
 
   for (var i = 1; i < values.length; i++) {
-    const id = idxId >= 0 ? String(values[i][idxId] || '').trim() : '';
     const tanggal = idxTanggal >= 0 ? String(values[i][idxTanggal] || '').trim() : '';
     const koordinat = idxKoordinat >= 0 ? String(values[i][idxKoordinat] || '').trim() : '';
-    const key = [id, tanggal, koordinat].join('|');
+    const key = buildDuplicateKey_(tanggal, koordinat, '');
+
+    if (!key) {
+      continue;
+    }
 
     const isDuplicate = Boolean(keySeen[key]);
     keySeen[key] = true;
@@ -913,7 +1058,7 @@ function pindahkanLinkSaja() {
   SpreadsheetApp.getUi().alert('Link berhasil dipindahkan: ' + output.length + ' baris.');
 }
 
-function detectDuplicateStatus_(sheet, id, tanggal, koordinat) {
+function detectDuplicateStatus_(sheet, id, tanggal, koordinat, noPohon) {
   const values = sheet.getDataRange().getValues();
   if (values.length <= 1) {
     return 'UNIK';
@@ -924,19 +1069,24 @@ function detectDuplicateStatus_(sheet, id, tanggal, koordinat) {
   const idxId = idx['ID'];
   const idxTanggal = idx['Tanggal'];
   const idxKoordinat = idx['Koordinat'];
+  const idxNoPohon = idx['No Pohon'];
 
-  const keyTarget = [id, tanggal, koordinat].join('|');
+  const keyTarget = buildDuplicateKey_(tanggal, koordinat, noPohon);
+  if (!keyTarget) {
+    return 'UNIK';
+  }
+
   for (var i = 1; i < values.length; i++) {
     const rowId = idxId >= 0 ? String(values[i][idxId] || '').trim() : '';
     if (rowId && rowId === id) {
       continue;
     }
 
-    const key = [
-      rowId,
+    const key = buildDuplicateKey_(
       idxTanggal >= 0 ? String(values[i][idxTanggal] || '').trim() : '',
       idxKoordinat >= 0 ? String(values[i][idxKoordinat] || '').trim() : '',
-    ].join('|');
+      idxNoPohon >= 0 ? String(values[i][idxNoPohon] || '').trim() : '',
+    );
 
     if (key === keyTarget) {
       return 'DUPLIKAT';
@@ -1096,6 +1246,7 @@ function computeEcologyFromRows_(headers, dataRows) {
   const maxHeightCm = heightsCm.length > 0 ? round_(Math.max.apply(null, heightsCm), 2) : 0;
   const canopyCoverPct = estimateCanopyCoverPct_(heightsCm, totalTrees);
   const hcvHealthIndex = computeHcvHealthIndex_(treeRows);
+  const gpsAnalysis = analyzeGpsAccuracyFromRows_(treeRows);
 
   return {
     summary: {
@@ -1111,7 +1262,7 @@ function computeEcologyFromRows_(headers, dataRows) {
       spacingMean: 0,
       spacingStd: 0,
       spacingConformity: 0,
-      gpsAccuracy: 0,
+      gpsAccuracy: gpsAnalysis.medianAccuracy,
       areaHa: 0,
       totalBiomass: totalBiomass,
       totalCarbon: round_(estimateCarbonFromBiomass_(totalBiomass), 3),
@@ -1909,18 +2060,120 @@ function normalizeTanggal_(value) {
   return raw;
 }
 
-function saveImageAndReturnUrl_(payload, id) {
-  const rawBase64 = payload.RawBase64 || payload.Base64 || extractRawBase64_(payload.Gambar);
+function saveImageAndReturnUrl_(payload, id, imagePath) {
+  const rawBase64 = String(payload.RawBase64 || payload.Base64 || extractRawBase64_(payload.Gambar) || '').trim();
   if (!rawBase64) {
-    return '';
+    return {
+      url: '',
+      status: 'skipped',
+      message: 'Tidak ada foto yang dikirim.',
+    };
+  }
+
+  // Size check - Apps Script quota protection
+  if (rawBase64.length > 10 * 1024 * 1024) { // 10MB
+    return {
+      url: '',
+      status: 'error',
+      message: 'File terlalu besar (>10MB).',
+    };
+  }
+
+  let bytes;
+  try {
+    bytes = Utilities.base64Decode(rawBase64);
+  } catch (error) {
+    console.error('Base64 decode failed:', error);
+    return {
+      url: '',
+      status: 'error',
+      message: 'Base64 invalid. Length: ' + rawBase64.length,
+    };
   }
 
   const folder = getOrCreateFolder_(FOLDER_NAME);
-  const fileName = 'Montana_' + id + '.jpg';
-  const blob = Utilities.newBlob(Utilities.base64Decode(rawBase64), 'image/jpeg', fileName);
-  const file = folder.createFile(blob);
-  file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-  return file.getUrl();
+  const fileName = getFileNameFromPath_(imagePath) || ('Montana_' + id + '.jpg');
+
+  try {
+    const blob = Utilities.newBlob(bytes, 'image/jpeg', fileName);
+    const file = folder.createFile(blob);
+    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+
+    console.log('✅ Image saved to Drive:', fileName, file.getUrl());
+    return {
+      url: file.getUrl(),
+      status: 'saved',
+      message: 'Foto berhasil disimpan ke Google Drive.',
+    };
+  } catch (error) {
+    console.error('❌ DriveApp failed (Access denied? Check scopes):', error.toString());
+    console.log('⏭️ Continuing: Metadata will save without photo link');
+    return {
+      url: '',
+      status: 'error',
+      message: 'DriveApp gagal: ' + (error && error.message ? error.message : String(error)),
+    };
+  }
+}
+
+function inspectDriveAccess_() {
+  try {
+    const folder = getOrCreateFolder_(FOLDER_NAME);
+    const testName = 'drive_access_test_' + Date.now() + '.txt';
+    const blob = Utilities.newBlob(
+      'Montana Drive test ' + new Date().toISOString(),
+      'text/plain',
+      testName,
+    );
+    const file = folder.createFile(blob);
+    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+
+    return {
+      status: 'success',
+      message: 'Akses Drive berhasil.',
+      folderName: folder.getName(),
+      folderId: folder.getId(),
+      folderUrl: folder.getUrl(),
+      fileId: file.getId(),
+      fileName: file.getName(),
+      url: file.getUrl(),
+    };
+  } catch (error) {
+    return {
+      status: 'error',
+      message: 'Akses Drive gagal: ' + (error && error.message ? error.message : String(error)),
+      folderName: FOLDER_NAME,
+    };
+  }
+}
+
+function parseQueryStringBody_(raw) {
+  const out = {};
+  const pairs = String(raw || '').split('&');
+
+  for (var i = 0; i < pairs.length; i++) {
+    const pair = String(pairs[i] || '').trim();
+    if (!pair) {
+      continue;
+    }
+
+    const eqIndex = pair.indexOf('=');
+    const key = eqIndex >= 0 ? pair.slice(0, eqIndex) : pair;
+    const value = eqIndex >= 0 ? pair.slice(eqIndex + 1) : '';
+    const decodedKey = decodeURIComponent(String(key || '').replace(/\+/g, ' '));
+    const decodedValue = decodeURIComponent(String(value || '').replace(/\+/g, ' '));
+    out[decodedKey] = decodedValue;
+  }
+
+  return out;
+}
+
+function logServerEvent_(label, payload) {
+  try {
+    console.log('[Montana] ' + label + ' ' + JSON.stringify(payload || {}));
+  } catch (error) {
+    console.log('[Montana] ' + label + ' (payload tidak bisa di-serialize)');
+  }
 }
 
 function extractRawBase64_(dataUrl) {
@@ -1934,7 +2187,34 @@ function extractRawBase64_(dataUrl) {
   return text;
 }
 
+function buildImagePath_(payload, id, fallbackValue) {
+  const rawPath = String(payload.Gambar_Nama_File || payload.gambarNamaFile || fallbackValue || '').trim();
+  const normalized = rawPath.replace(/\\+/g, '/');
+  const fileName = getFileNameFromPath_(normalized) || ('Montana_' + id + '.jpg');
+  return FOLDER_NAME + '/' + fileName;
+}
+
+function getFileNameFromPath_(value) {
+  const normalized = String(value || '').trim().replace(/\\+/g, '/');
+  if (!normalized) {
+    return '';
+  }
+
+  const parts = normalized.split('/').filter(function (part) {
+    return String(part || '').trim() !== '';
+  });
+  return parts.length > 0 ? parts[parts.length - 1] : '';
+}
+
 function getOrCreateFolder_(folderName) {
+  if (FOLDER_ID) {
+    try {
+      return DriveApp.getFolderById(FOLDER_ID);
+    } catch (error) {
+      console.log('Folder by ID gagal diakses, fallback ke nama folder:', error && error.message ? error.message : String(error));
+    }
+  }
+
   const folders = DriveApp.getFoldersByName(folderName);
   if (folders.hasNext()) {
     return folders.next();
@@ -2002,11 +2282,11 @@ function computeHcvInput_(kesehatan, aiKesehatan, aiConfidence) {
 function generateHealthDescription_(kesehatan, aiKesehatan, aiConfidence, hcvInput) {
   var health = normalizeHealth_(aiKesehatan || kesehatan || 'Sehat');
   var conf = Number(aiConfidence);
-  if (!isFinite(conf) || conf <= 0) conf = 50;
+if (!Number.isFinite(conf) || conf <= 0) conf = 50;
   conf = Math.max(0, Math.min(100, conf));
 
   var hcv = Number(hcvInput);
-  if (!isFinite(hcv) || hcv < 0) {
+if (!Number.isFinite(hcv) || hcv < 0) {
     hcv = mapHealthToHcvWeight_(health) * conf;
     hcv = Math.round(hcv * 100) / 100;
   }
@@ -2027,19 +2307,53 @@ function generateHealthDescription_(kesehatan, aiKesehatan, aiConfidence, hcvInp
   // Interpretasi confidence
   var confDesc;
   if (conf >= 80) {
-    confDesc = 'Tingkat keyakinan ' + conf + '% (tinggi) \u2014 distribusi piksel vegetasi konsisten dan terkonsentrasi pada satu kelas spektral';
+    confDesc = 'Tingkat keyakinan ' + conf + '% (tinggi) - distribusi piksel vegetasi konsisten dan terkonsentrasi pada satu kelas spektral';
   } else if (conf >= 50) {
-    confDesc = 'Tingkat keyakinan ' + conf + '% (sedang) \u2014 sebagian piksel menunjukkan variasi spektral antar kelas kesehatan';
+    confDesc = 'Tingkat keyakinan ' + conf + '% (sedang) - sebagian piksel menunjukkan variasi spektral antar kelas kesehatan';
   } else {
-    confDesc = 'Tingkat keyakinan ' + conf + '% (rendah) \u2014 distribusi spektral tersebar, kemungkinan noise atau campuran objek non-vegetasi';
+    confDesc = 'Tingkat keyakinan ' + conf + '% (rendah) - distribusi spektral tersebar, kemungkinan noise atau campuran objek non-vegetasi';
   }
 
   return [
     'Analisis Kesehatan Vegetasi:',
-    'Klasifikasi: ' + healthLabel + ' \u2014 ' + healthDesc + '.',
+    'Klasifikasi: ' + healthLabel + ' - ' + healthDesc + '.',
     confDesc + '.',
-    'HCV Score: ' + hcv + '% \u2014 indeks komposit konservasi kesehatan vegetasi.',
+    'HCV Score: ' + hcv + '% - indeks komposit konservasi kesehatan vegetasi.',
   ].join(' ');
+}
+
+function buildDuplicateKey_(tanggal, koordinat, noPohon) {
+  const normalizedTreeNo = String(noPohon || '').trim();
+  if (normalizedTreeNo) {
+    return 'NO|' + normalizedTreeNo;
+  }
+
+  const datePart = extractDatePart_(tanggal);
+  const coordinateKey = normalizeCoordinateKey_(koordinat);
+  if (!datePart || !coordinateKey) {
+    return '';
+  }
+
+  return 'COORD|' + datePart + '|' + coordinateKey;
+}
+
+function extractDatePart_(tanggal) {
+  const text = String(tanggal || '').trim();
+  if (!text) {
+    return '';
+  }
+
+  const match = text.match(/^(\d{1,2}\/\d{1,2}\/\d{4})/);
+  return match && match[1] ? match[1] : text;
+}
+
+function normalizeCoordinateKey_(coordinateText) {
+  const fixed = getFixedLatLon_('', '', coordinateText);
+  if (!fixed) {
+    return String(coordinateText || '').trim();
+  }
+
+  return round_(fixed.lat, 5) + ',' + round_(fixed.lon, 5);
 }
 
 function normalizeHealth_(value) {
@@ -2077,6 +2391,19 @@ function buildHeaderIndex_(headers) {
     map[String(h || '').trim()] = i;
   });
   return map;
+}
+
+function getByHeader_(row, headerIndex, name) {
+  if (!row) {
+    return '';
+  }
+
+  const idx = headerIndex[name];
+  if (idx === undefined || idx < 0) {
+    return '';
+  }
+
+  return row[idx];
 }
 
 function setByHeader_(row, headerIndex, name, value) {
@@ -2154,4 +2481,474 @@ function generateId_() {
 
 function jsonResponse_(data) {
   return ContentService.createTextOutput(JSON.stringify(data)).setMimeType(ContentService.MimeType.JSON);
+}
+
+function tandaiDuplikatMontana() {
+  const sheet = SpreadsheetApp.getActiveSheet();
+  const lastRow = sheet.getLastRow();
+  const lastCol = sheet.getLastColumn();
+  if (lastRow < 2) return;
+
+  // Ambil header
+  const headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0].map((h) => String(h || '').trim());
+  const idxTanggal = headers.indexOf('Tanggal');
+  const idxKoordinat = headers.indexOf('Koordinat');
+  const idxNoPohonSource = headers.indexOf('No Pohon');
+
+  if (idxTanggal === -1 || idxKoordinat === -1) {
+    throw new Error("Kolom 'Tanggal' atau 'Koordinat' tidak ditemukan");
+  }
+
+  // Cari kolom Status_Duplikat
+  let statusColIndex = headers.indexOf('Status_Duplikat');
+  if (statusColIndex === -1) {
+    statusColIndex = lastCol;
+    sheet.getRange(1, statusColIndex + 1).setValue('Status_Duplikat');
+  }
+
+  // Cari / buat kolom No Pohon
+  let noPohonColIndex = headers.indexOf('No Pohon');
+  if (noPohonColIndex === -1) {
+    noPohonColIndex = statusColIndex + 1;
+    sheet.getRange(1, noPohonColIndex + 1).setValue('No Pohon');
+  }
+
+  const data = sheet.getRange(2, 1, lastRow - 1, lastCol).getValues();
+
+  let map = {};
+  let statusResult = [];
+  let bgColors = [];
+  let nomorPohon = [];
+  let counter = 1;
+
+  data.forEach((row) => {
+    const tanggal = String(row[idxTanggal] || '').trim();
+    const koordinat = String(row[idxKoordinat] || '').trim();
+    const noPohon = idxNoPohonSource >= 0 ? String(row[idxNoPohonSource] || '').trim() : '';
+    const key = buildDuplicateKey_(tanggal, koordinat, noPohon);
+
+    if (!key) {
+      statusResult.push(['UNIK']);
+      bgColors.push([null]);
+      nomorPohon.push(['']);
+      return;
+    }
+
+    if (!map[key]) {
+      map[key] = true;
+
+      statusResult.push(['UNIK']);
+      bgColors.push([null]);
+
+      nomorPohon.push([counter]); // 1,2,3,4
+      counter++;
+    } else {
+      statusResult.push(['DUPLIKAT']);
+      bgColors.push(['#f8d7da']);
+
+      nomorPohon.push(['']); // kosong jika duplikat
+    }
+  });
+
+  // tulis status
+  sheet
+    .getRange(2, statusColIndex + 1, statusResult.length, 1)
+    .setValues(statusResult)
+    .setBackgrounds(bgColors);
+
+  // tulis nomor pohon
+  sheet
+    .getRange(2, noPohonColIndex + 1, nomorPohon.length, 1)
+    .setValues(nomorPohon);
+}
+/**
+ * Optimized: replace Links with Paths and (optionally) move files into FOLDER_NAME
+ * - jika moveFiles=true -> akan addFile(file) ke target folder dan coba remove parent lama
+ * - caching file names dan proses per chunk
+ */
+function optimizedReplaceLinksWithPathsInSheet(moveFiles = true, chunkSize = 100) {
+  const sheet = getMonitoringSheet();
+  const { headers, colMap } = getHeadersAndMap(sheet);
+
+  const linkCol = headers.indexOf("Link Drive");
+  if (linkCol === -1) throw new Error("Kolom 'Link Drive' tidak ditemukan");
+
+  let gambarCol = headers.indexOf("Gambar");
+  if (gambarCol === -1) gambarCol = ensureHeader(sheet, headers, colMap, "Gambar");
+
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) { SpreadsheetApp.getUi().alert("Tidak ada data."); return; }
+
+  const links = sheet.getRange(2, linkCol + 1, lastRow - 1, 1).getValues().map(r => String(r[0] || "").trim());
+
+  // build unique fileId list and row->fileId map
+  const uniqueIds = [];
+  const rowFileId = new Array(links.length).fill(null);
+  for (let i = 0; i < links.length; i++) {
+    const m = links[i].match(/[-\w]{25,}/);
+    if (m) {
+      rowFileId[i] = m[0];
+      if (!uniqueIds.includes(m[0])) uniqueIds.push(m[0]);
+    }
+  }
+
+  // prepare folder (if moveFiles true)
+  let targetFolder = null;
+  if (moveFiles) {
+    const folders = DriveApp.getFoldersByName(FOLDER_NAME);
+    targetFolder = folders.hasNext() ? folders.next() : DriveApp.createFolder(FOLDER_NAME);
+  }
+
+  // cache fileId -> filename or error
+  const cache = {};
+
+  // Fetch file names in batches (reduce re-calls)
+  for (let s = 0; s < uniqueIds.length; s += chunkSize) {
+    const batch = uniqueIds.slice(s, s + chunkSize);
+    batch.forEach(fid => {
+      if (cache[fid] !== undefined) return;
+      try {
+        const f = DriveApp.getFileById(fid);
+        // optionally move: addFile then remove old parents (best-effort)
+        if (moveFiles && targetFolder) {
+          let already = false;
+          const parents = f.getParents();
+          while (parents.hasNext()) {
+            if (parents.next().getId() === targetFolder.getId()) { already = true; break; }
+          }
+          if (!already) {
+            try { targetFolder.addFile(f); } catch(e) { /* ignore */ }
+            // try remove from other parents
+            const oldParents = f.getParents();
+            while (oldParents.hasNext()) {
+              const p = oldParents.next();
+              if (p.getId() !== targetFolder.getId()) {
+                try { p.removeFile(f); } catch(e) { /* ignore permission errors */ }
+              }
+            }
+          }
+        }
+        cache[fid] = f.getName();
+      } catch (err) {
+        cache[fid] = "ERROR: " + (err.message || err.toString());
+      }
+    });
+  }
+
+  // write results in chunks
+  for (let start = 0; start < rowFileId.length; start += chunkSize) {
+    const end = Math.min(rowFileId.length, start + chunkSize);
+    const out = [];
+    for (let i = start; i < end; i++) {
+      const fid = rowFileId[i];
+      if (!fid) { out.push([""]); continue; }
+      const v = cache[fid];
+      if (!v) out.push(["ERROR: unknown"]);
+      else if (v.indexOf("ERROR:") === 0) out.push([v]);
+      else out.push([FOLDER_NAME + "/" + v]);
+    }
+    sheet.getRange(2 + start, gambarCol + 1, out.length, 1).setValues(out);
+  }
+
+  SpreadsheetApp.getUi().alert("optimizedReplaceLinksWithPathsInSheet selesai. Rows processed: " + links.length);
+}
+function testSingleFile() {
+  const fileId = "1FQOzpPGwK6QBCRX0O5G3kSmRdE-gdT_1";
+  const file = DriveApp.getFileById(fileId);
+  Logger.log(file.getName());
+}
+function masukkanSemuaKeKolomGambar() {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Data Monitoring");
+  const data = sheet.getDataRange().getValues();
+  const headers = data[0];
+
+  const linkCol = headers.indexOf("Link Drive");
+  let gambarCol = headers.indexOf("Gambar");
+
+  if (linkCol === -1) throw new Error("Kolom 'Link Drive' tidak ditemukan");
+
+  // Jika kolom Gambar belum ada, buat otomatis
+  if (gambarCol === -1) {
+    gambarCol = headers.length;
+    sheet.getRange(1, gambarCol + 1).setValue("Gambar");
+  }
+
+  let updated = 0;
+
+  for (let i = 1; i < data.length; i++) {
+    const link = data[i][linkCol];
+    const currentValue = sheet.getRange(i + 1, gambarCol + 1).getValue();
+
+    if (!link || currentValue) continue;
+
+    const match = String(link).match(/[-\w]{25,}/);
+    if (!match) continue;
+
+    try {
+      const fileId = match[0];
+      const file = DriveApp.getFileById(fileId);
+      const fileName = file.getName();
+      const path = "Montana V2_Images/" + fileName;
+
+      sheet.getRange(i + 1, gambarCol + 1).setValue(path);
+      updated++;
+    } catch (err) {
+      Logger.log("Gagal baris " + (i + 1));
+    }
+  }
+
+  Logger.log("Selesai. Total update: " + updated);
+}
+function convertPathToDriveLink() {
+  const sheet = getMonitoringSheet();
+  const { headers, colMap } = getHeadersAndMap(sheet);
+
+  const gambarCol = headers.indexOf("Gambar");
+  let linkCol = headers.indexOf("Link Drive");
+
+  if (gambarCol === -1) throw new Error("Kolom 'Gambar' tidak ditemukan");
+
+  // Jika kolom Link Drive belum ada → buat
+  if (linkCol === -1) {
+    linkCol = ensureHeader(sheet, headers, colMap, "Link Drive");
+  }
+
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return;
+
+  const gambarData = sheet.getRange(2, gambarCol + 1, lastRow - 1, 1).getValues();
+
+  // Ambil folder
+  const folders = DriveApp.getFoldersByName(FOLDER_NAME);
+  if (!folders.hasNext()) throw new Error("Folder tidak ditemukan: " + FOLDER_NAME);
+  const folder = folders.next();
+
+  // Ambil semua file di folder → cache nama ke ID
+  const files = folder.getFiles();
+  const fileMap = {};
+
+  while (files.hasNext()) {
+    const f = files.next();
+    fileMap[f.getName()] = f.getId();
+  }
+
+  const output = [];
+
+  for (let i = 0; i < gambarData.length; i++) {
+    const path = String(gambarData[i][0] || "").trim();
+
+    if (!path) {
+      output.push([""]);
+      continue;
+    }
+
+    // ambil nama file dari path
+    const fileName = path.split("/").pop();
+
+    if (fileMap[fileName]) {
+      const fileId = fileMap[fileName];
+      const url = "https://drive.google.com/file/d/" + fileId + "/view?usp=drivesdk";
+      output.push([url]);
+    } else {
+      output.push(["ERROR: file tidak ditemukan"]);
+    }
+  }
+
+  sheet.getRange(2, linkCol + 1, output.length, 1).setValues(output);
+
+  SpreadsheetApp.getUi().alert("Selesai convert path → link drive");
+}
+function convertPathToDriveLink_OverwriteM() {
+  const sheet = getMonitoringSheet();
+  const data = sheet.getDataRange().getValues();
+  const headers = data[0].map(h => String(h || "").trim());
+
+  const gambarCol = headers.indexOf("Gambar");
+  const linkCol = headers.indexOf("Link Drive"); // kolom M
+
+  if (gambarCol === -1) throw new Error("Kolom 'Gambar' tidak ditemukan");
+  if (linkCol === -1) throw new Error("Kolom 'Link Drive' tidak ditemukan");
+
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return;
+
+  // Ambil folder
+  const folders = DriveApp.getFoldersByName(FOLDER_NAME);
+  if (!folders.hasNext()) throw new Error("Folder tidak ditemukan: " + FOLDER_NAME);
+  const folder = folders.next();
+
+  // Cache: nama file -> fileId
+  const files = folder.getFiles();
+  const fileMap = {};
+
+  while (files.hasNext()) {
+    const f = files.next();
+    fileMap[f.getName()] = f.getId();
+  }
+
+  const output = [];
+
+  for (let i = 1; i < data.length; i++) {
+    const path = String(data[i][gambarCol] || "").trim();
+
+    if (!path) {
+      output.push([""]);
+      continue;
+    }
+
+    const fileName = path.split("/").pop();
+
+    if (fileMap[fileName]) {
+      const fileId = fileMap[fileName];
+      const url = "https://drive.google.com/file/d/" + fileId + "/view?usp=drivesdk";
+      output.push([url]);
+    } else {
+      output.push(["ERROR: file tidak ditemukan"]);
+    }
+  }
+
+  // 🔥 overwrite langsung kolom M (Link Drive)
+  sheet.getRange(2, linkCol + 1, output.length, 1).setValues(output);
+
+  SpreadsheetApp.getUi().alert("Selesai: kolom Link Drive (M) diupdate dari path Gambar");
+}
+function setupKolomStandar() {
+  const sheet = getMonitoringSheet();
+  let { headers, colMap } = getHeadersAndMap(sheet);
+
+  function addIfNotExist(name) {
+    if (colMap[name] === undefined) {
+      const idx = headers.length;
+      sheet.getRange(1, idx + 1).setValue(name);
+      headers.push(name);
+      colMap[name] = idx;
+    }
+  }
+
+  addIfNotExist("FileID");
+  addIfNotExist("Link Drive");
+  addIfNotExist("Gambar");
+
+  SpreadsheetApp.getUi().alert("Kolom standar siap (FileID, Link Drive, Gambar)");
+}
+function isiLinkDriveDariID() {
+  const sheet = getMonitoringSheet();
+  const { headers } = getHeadersAndMap(sheet);
+
+  const linkCol = headers.indexOf("Link Drive");
+  const idCol = headers.indexOf("ID");
+
+  if (linkCol === -1) throw new Error("Kolom Link Drive tidak ditemukan");
+  if (idCol === -1) throw new Error("Kolom ID tidak ditemukan");
+
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return;
+
+  const data = sheet.getRange(2, 1, lastRow - 1, sheet.getLastColumn()).getValues();
+
+  const folders = DriveApp.getFoldersByName(FOLDER_NAME);
+  if (!folders.hasNext()) return;
+  const folder = folders.next();
+
+  // 🔥 Ambil semua file di folder
+  const files = folder.getFiles();
+  const fileList = [];
+
+  while (files.hasNext()) {
+    const f = files.next();
+    fileList.push({
+      name: String(f.getName()),
+      id: f.getId()
+    });
+  }
+
+  const output = [];
+
+  for (let i = 0; i < data.length; i++) {
+    const row = data[i];
+    const existingLink = String(row[linkCol] || "").trim();
+
+    // ✔ jika sudah ada link → skip
+    if (existingLink) {
+      output.push([existingLink]);
+      continue;
+    }
+
+    const id = String(row[idCol] || "").trim();
+
+    if (!id) {
+      output.push([""]);
+      continue;
+    }
+
+    // 🔥 Cari file yang mengandung ID
+    const found = fileList.find(f => f.name.includes(id));
+
+    if (found) {
+      const url = "https://drive.google.com/file/d/" + found.id + "/view?usp=drivesdk";
+      output.push([url]);
+    } else {
+      output.push([""]); // tidak error
+    }
+  }
+
+  sheet.getRange(2, linkCol + 1, output.length, 1).setValues(output);
+
+  SpreadsheetApp.getUi().alert("Selesai: Link Drive diisi dari ID");
+}
+function isiLinkDriveDariNamaFile() {
+  const sheet = getMonitoringSheet();
+  const { headers } = getHeadersAndMap(sheet);
+
+  const linkCol = headers.indexOf("Link Drive");
+  const gambarCol = headers.indexOf("Gambar");
+
+  if (linkCol === -1) throw new Error("Kolom Link Drive tidak ditemukan");
+  if (gambarCol === -1) throw new Error("Kolom Gambar tidak ditemukan");
+
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return;
+
+  const data = sheet.getRange(2, 1, lastRow - 1, sheet.getLastColumn()).getValues();
+
+  const folders = DriveApp.getFoldersByName(FOLDER_NAME);
+  if (!folders.hasNext()) return;
+  const folder = folders.next();
+
+  const output = [];
+
+  for (let i = 0; i < data.length; i++) {
+    const row = data[i];
+    const currentLink = String(row[linkCol] || "").trim();
+
+    // ✔ hanya isi jika kosong
+    if (currentLink) {
+      output.push([currentLink]);
+      continue;
+    }
+
+    const path = String(row[gambarCol] || "").trim();
+    if (!path) {
+      output.push([""]);
+      continue;
+    }
+
+    // 🔥 ambil nama file saja
+    const fileName = path.split("/").pop();
+
+    // 🔥 cari file langsung di folder
+    const files = folder.getFilesByName(fileName);
+
+    if (files.hasNext()) {
+      const file = files.next();
+      const url = "https://drive.google.com/file/d/" + file.getId() + "/view?usp=drivesdk";
+      output.push([url]);
+    } else {
+      output.push([""]); // tidak error
+    }
+  }
+
+  sheet.getRange(2, linkCol + 1, output.length, 1).setValues(output);
+
+  SpreadsheetApp.getUi().alert("Selesai: Link diisi dari nama file (exact match)");
 }

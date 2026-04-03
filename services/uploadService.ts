@@ -5,7 +5,10 @@ export interface UploadResult {
   ok: boolean;
   confirmed: boolean;
   message: string;
+  warning?: string;
 }
+
+const MAX_APPS_SCRIPT_BODY_BYTES = 5_000_000;
 
 const sleep = (ms: number): Promise<void> =>
   new Promise((resolve) => {
@@ -19,14 +22,22 @@ const isLikelyAppsScriptUrl = (url: string): boolean => {
 
 const normalizeUrl = (url: string): string => url.trim();
 
+const getUtf8ByteLength = (value: string): number => {
+  try {
+    return new TextEncoder().encode(value).length;
+  } catch {
+    return value.length;
+  }
+};
+
 const isEntryPersistedInCloud = async (url: string, entryId: string): Promise<boolean> => {
   const cleanUrl = normalizeUrl(url);
   const separator = cleanUrl.includes('?') ? '&' : '?';
-  const listUrl = `${cleanUrl}${separator}action=list&limit=30&offset=0&order=desc`;
+  const listUrl = `${cleanUrl}${separator}action=list&limit=100&offset=0&order=desc`;
 
-  for (let attempt = 0; attempt < 3; attempt++) {
+  for (let attempt = 0; attempt < 5; attempt++) {
     if (attempt > 0) {
-      await sleep(700 * attempt);
+      await sleep(1000 * attempt);
     }
 
     try {
@@ -41,7 +52,11 @@ const isEntryPersistedInCloud = async (url: string, entryId: string): Promise<bo
       }
 
       const result = await response.json();
-      const rows = Array.isArray(result?.data) ? result.data : [];
+      const rows = Array.isArray(result?.data)
+        ? result.data
+        : Array.isArray(result)
+          ? result
+          : [];
       const found = rows.some((row: any) => String(row?.ID || '').trim() === entryId);
       if (found) {
         return true;
@@ -52,6 +67,23 @@ const isEntryPersistedInCloud = async (url: string, entryId: string): Promise<bo
   }
 
   return false;
+};
+
+const verifyPersistedAfterCorsResponse = async (url: string, entryId: string): Promise<UploadResult> => {
+  const verified = await isEntryPersistedInCloud(url, entryId);
+  if (verified) {
+    return {
+      ok: true,
+      confirmed: true,
+      message: 'Data tersimpan dan terverifikasi lewat pengecekan list terbaru.',
+    };
+  }
+
+  return {
+    ok: true,
+    confirmed: false,
+    message: 'Respons server diterima, tetapi ID belum ditemukan di spreadsheet. Data tetap di antrian retry.',
+  };
 };
 
 export const uploadToAppsScript = async (url: string, entry: PlantEntry): Promise<UploadResult> => {
@@ -137,11 +169,24 @@ export const uploadToAppsScript = async (url: string, entry: PlantEntry): Promis
     "AI_Confidence": Number.isFinite(entry.aiConfidence as number) ? Number(entry.aiConfidence).toFixed(2) : '',
     "AI_Deskripsi": entry.aiDeskripsi || '',
     "HCV_Input": Number.isFinite(entry.hcvInput as number) ? Number(entry.hcvInput).toFixed(2) : '',
+    "HCV_Deskripsi": entry.hcvDescription || '',
     "GPS_Quality": entry.gpsQualityAtCapture || 'Tidak Tersedia',
     "GPS_Accuracy_M": Number.isFinite(entry.gpsAccuracyAtCapture) ? Number(entry.gpsAccuracyAtCapture).toFixed(1) : '',
-    "Base64": rawBase64,
+    // Hindari mengirim Base64 dua kali karena membuat request membengkak.
+    "Base64": '',
     "RawBase64": rawBase64
   };
+
+  const requestBody = JSON.stringify(payload);
+  const requestBodyBytes = getUtf8ByteLength(requestBody);
+  if (requestBodyBytes > MAX_APPS_SCRIPT_BODY_BYTES) {
+    const sizeMb = (requestBodyBytes / (1024 * 1024)).toFixed(2);
+    return {
+      ok: false,
+      confirmed: false,
+      message: `Ukuran payload ${sizeMb} MB terlalu besar untuk Apps Script. Foto perlu diperkecil sebelum dikirim ke Drive.`,
+    };
+  }
 
   // 1) Coba kirim dengan CORS agar status sukses/error bisa diverifikasi dari JSON Apps Script.
   try {
@@ -151,14 +196,18 @@ export const uploadToAppsScript = async (url: string, entry: PlantEntry): Promis
       headers: {
         'Content-Type': 'text/plain;charset=utf-8',
       },
-      body: JSON.stringify(payload),
+      body: requestBody,
     });
 
     if (!corsResponse.ok) {
+      const responsePreview = await corsResponse.text().catch(() => '');
+      const compactPreview = responsePreview.replace(/\s+/g, ' ').trim().slice(0, 180);
       return {
         ok: false,
         confirmed: true,
-        message: `HTTP ${corsResponse.status} saat sinkronisasi.`,
+        message: compactPreview
+          ? `HTTP ${corsResponse.status} saat sinkronisasi. Respons: ${compactPreview}`
+          : `HTTP ${corsResponse.status} saat sinkronisasi.`,
       };
     }
 
@@ -166,11 +215,7 @@ export const uploadToAppsScript = async (url: string, entry: PlantEntry): Promis
     try {
       result = await corsResponse.json();
     } catch {
-      return {
-        ok: true,
-        confirmed: true,
-        message: 'Upload berhasil, tetapi respons JSON tidak terbaca.',
-      };
+      return verifyPersistedAfterCorsResponse(cleanUrl, entry.id);
     }
 
     if (result && result.status === 'error') {
@@ -181,10 +226,19 @@ export const uploadToAppsScript = async (url: string, entry: PlantEntry): Promis
       };
     }
 
+    if (!result || (result.status && result.status !== 'success')) {
+      return verifyPersistedAfterCorsResponse(cleanUrl, entry.id);
+    }
+
+    const driveWarning = rawBase64 && String(result?.url || '').trim() === ''
+      ? 'Data cloud tersimpan, tetapi foto belum berhasil dibuat di Google Drive.'
+      : undefined;
+
     return {
       ok: true,
       confirmed: true,
       message: result?.message || 'Upload berhasil.',
+      warning: driveWarning,
     };
   } catch {
     // 2) Fallback no-cors untuk deployment Apps Script yang tidak membuka CORS.
@@ -196,7 +250,7 @@ export const uploadToAppsScript = async (url: string, entry: PlantEntry): Promis
         headers: {
           'Content-Type': 'text/plain;charset=utf-8',
         },
-        body: JSON.stringify(payload),
+        body: requestBody,
       });
 
       const verified = await isEntryPersistedInCloud(cleanUrl, entry.id);
