@@ -74,6 +74,7 @@ const GPS_ACCURACY_THRESHOLD_M = 20;
 const DESKTOP_GPS_ACCURACY_THRESHOLD_M = 60;
 const MAX_ACTIVE_ENTRIES = 60;
 const DEFAULT_APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxcCr5mXPRBHmZ6NGdlwY9Y8IhEJbYxkaYvSfLskLPrJ2gv_pmL1ZhEJ31a0JO6gin12A/exec';
+const APPS_SCRIPT_CONFIG_VERSION = '2026-04-03-gas-v2';
 const STORAGE_WARNING_RATIO = 0.75;
 const STORAGE_CRITICAL_RATIO = 0.9;
 const LEGACY_APPS_SCRIPT_URLS = [
@@ -296,6 +297,7 @@ const App: React.FC = () => {
   const [lastSpreadsheetBackupAt, setLastSpreadsheetBackupAt] = useLocalStorage<string | null>('lastSpreadsheetBackupAt', null);
   const [lastSpreadsheetBackupReminderAt, setLastSpreadsheetBackupReminderAt] = useLocalStorage<string | null>('lastSpreadsheetBackupReminderAt', null);
   const [lastLocalMutationAt, setLastLocalMutationAt] = useLocalStorage<string | null>('lastLocalMutationAt', null);
+  const [appsScriptConfigVersion, setAppsScriptConfigVersion] = useLocalStorage<string>('appsScriptConfigVersion', '');
 
   const [gps, setGps] = useState<GpsLocation | null>(null);
   const [appsScriptUrl, setAppsScriptUrl] = useLocalStorage<string>(
@@ -362,6 +364,15 @@ const App: React.FC = () => {
       setAppsScriptUrl(DEFAULT_APPS_SCRIPT_URL);
     }
   }, [appsScriptUrl, setAppsScriptUrl]);
+
+  useEffect(() => {
+    if (appsScriptConfigVersion === APPS_SCRIPT_CONFIG_VERSION) {
+      return;
+    }
+
+    setAppsScriptUrl(DEFAULT_APPS_SCRIPT_URL);
+    setAppsScriptConfigVersion(APPS_SCRIPT_CONFIG_VERSION);
+  }, [appsScriptConfigVersion, setAppsScriptConfigVersion, setAppsScriptUrl]);
 
   useEffect(() => {
     if (!('storage' in navigator) || typeof navigator.storage.persist !== 'function') {
