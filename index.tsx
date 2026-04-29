@@ -16,44 +16,11 @@ root.render(
 );
 
 const isSecureContextForSW = window.location.protocol === 'https:' || window.location.hostname === 'localhost';
-const shouldRegisterServiceWorker = import.meta.env.PROD && import.meta.env.VITE_ENABLE_SW === 'true';
-const appCachePrefixes = ['montana-'];
 
-const clearLegacyAppCaches = async () => {
-  if (!('caches' in window)) {
-    return;
-  }
-
-  const keys = await window.caches.keys();
-  await Promise.all(
-    keys
-      .filter((key) => appCachePrefixes.some((prefix) => key.startsWith(prefix)))
-      .map((key) => window.caches.delete(key)),
-  );
-};
-
-if ('serviceWorker' in navigator) {
+if ('serviceWorker' in navigator && isSecureContextForSW) {
   window.addEventListener('load', () => {
-    if (shouldRegisterServiceWorker && isSecureContextForSW) {
-      navigator.serviceWorker.register('/sw.js').catch((error) => {
-        console.error('Service worker registration failed:', error);
-      });
-      return;
-    }
-
-    navigator.serviceWorker
-      .getRegistrations()
-      .then(async (registrations) => {
-        await Promise.all(
-          registrations.map((registration) =>
-            registration.active?.postMessage({ type: 'CLEAR_CACHE' }),
-          ),
-        );
-        await Promise.all(registrations.map((registration) => registration.unregister()));
-        await clearLegacyAppCaches();
-      })
-      .catch((error) => {
-        console.error('Service worker cleanup failed:', error);
-      });
+    navigator.serviceWorker.register('/sw.js').catch((error) => {
+      console.error('Service worker registration failed:', error);
+    });
   });
 }

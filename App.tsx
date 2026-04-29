@@ -4,14 +4,12 @@ import { CameraView } from './components/CameraView';
 import { BottomSheet } from './components/BottomSheet';
 import { useLocalStorage } from './hooks/useLocalStorage';
 import { writeExifData } from './services/exifService';
-import { exportSpreadsheetBackup } from './services/exportService';
 import { uploadToAppsScript } from './services/uploadService';
 import { watchGpsLocation } from './services/gpsService';
-import { PlantEntry, GpsLocation, ToastState, FormState, DEFAULT_PLANT_TYPES, type AutoBackupIntervalMinutes, type BottomSheetTabRequest, type BrowserStorageStatus, type HcvInsightSelection, type SyncMode, type ViewMode } from './types';
-import { MapView } from './components/MapView';
+import { PlantEntry, GpsLocation, ToastState, FormState } from './types';
 import { Toast } from './components/Toast';
+import SyncStatusIndicator from './components/SyncStatusIndicator';
 import {
-  getAllEntries,
   getEntryStats,
   getPendingEntries,
   getRecentEntries,
@@ -19,14 +17,14 @@ import {
   saveEntry,
   updateEntrySyncMeta,
   clearAllEntries,
+  addToSyncQueue,
 } from './services/dbService';
 import { checkInternetConnection } from './services/networkService';
-import { generateHealthDescription, type PlantHealthResult } from './ecology/plantHealth.ts';
+import { initSync, triggerSync } from './services/syncService';
+import { generateHealthDescription, type PlantHealthResult } from './ecology/plantHealth';
 
-const RETRY_BASE_DELAY_MS = 5000;
+const RETRY_BASE_DELAY_MS = 15000;
 const RETRY_MAX_DELAY_MS = 5 * 60 * 1000;
-const FAST_SYNC_INTERVAL_MS = 3000;
-const AUTO_BACKUP_CHECK_INTERVAL_MS = 60 * 1000;
 
 const getRetryDelayMs = (retryCount: number): number => {
   const exponent = Math.max(0, retryCount - 1);
@@ -46,41 +44,11 @@ const dataUrlToFile = async (dataUrl: string, fileName: string): Promise<File> =
   return new File([blob], fileName, { type: blob.type || 'image/jpeg' });
 };
 
-const isLikelyValidImageDataUrl = (value: string): boolean => {
-  const clean = String(value || '').trim();
-  if (!/^data:image\/jpeg;base64,/i.test(clean) && !/^data:image\/jpg;base64,/i.test(clean)) {
-    return false;
-  }
-
-  const commaIndex = clean.indexOf(',');
-  if (commaIndex < 0) {
-    return false;
-  }
-
-  const rawBase64 = clean.slice(commaIndex + 1).replace(/\s+/g, '');
-  if (!rawBase64 || !/^[A-Za-z0-9+/]+=*$/.test(rawBase64)) {
-    return false;
-  }
-
-  try {
-    atob(rawBase64);
-    return true;
-  } catch {
-    return false;
-  }
-};
-
 const GPS_ACCURACY_THRESHOLD_M = 20;
 const DESKTOP_GPS_ACCURACY_THRESHOLD_M = 60;
 const MAX_ACTIVE_ENTRIES = 60;
-const DEFAULT_APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxcCr5mXPRBHmZ6NGdlwY9Y8IhEJbYxkaYvSfLskLPrJ2gv_pmL1ZhEJ31a0JO6gin12A/exec';
-const APPS_SCRIPT_CONFIG_VERSION = '2026-04-03-gas-v2';
-const STORAGE_WARNING_RATIO = 0.75;
-const STORAGE_CRITICAL_RATIO = 0.9;
+const DEFAULT_APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwwxuFkJCGh0FLY3-RpCbrCzltrXH5eVUIuK0qScj5f9DnkgdZwRFfC0mz1xBQMhBTmfQ/exec';
 const LEGACY_APPS_SCRIPT_URLS = [
-  'https://script.google.com/macros/s/AKfycbym0oMDXPNNWn9lKcM7_uC97Dgsu9a8CgnxW849AOeg8wyio7BYU9FBy0gJEveovUaO8g/exec',
-  'https://script.google.com/macros/s/AKfycbyZ7Jx8rPkjEcJk7wM_OnIacacu_1MmXisTmLdoyR0UmEqULszsCmgccVaGd3JvSkgsLw/exec',
-'https://script.google.com/macros/s/AKfycby4XdqAv_3Q980ZFNSSU9-MWDC9lTfDgQhVJiNkBPagGQZNCI6gwsEB2AwXk9Kauf5qbg/exec',
   'https://script.google.com/macros/s/AKfycbyOLIVrNrxyFIJHklKTUFEX-ckqPaORCo9ga6n7d_FGct5v01o5ZqD44bWj138zcTq49Q/exec',
   'https://script.google.com/macros/s/AKfycbzLvcetpQNfIl0NF_L5sfUxUq7vgcVDfCcfHfqif7SJZtSwYZ3jfwjbBX89EcjV5rg8kw/exec',
   'https://script.google.com/macros/s/AKfycbxcxJ2nTJpVqECVPkDhNo5ulpsL0G2KSdiwoOqpJeIBASVq_K3mFGpviIXDhPzcdre3sw/exec',
@@ -88,39 +56,6 @@ const LEGACY_APPS_SCRIPT_URLS = [
   'https://script.google.com/macros/s/AKfycbw_B-b96eu94j562hLAYKTMLLe9XhTMDS5JhL_GoPzb5OGpDrQ2JHfaiPgXW4lUbMwV_Q/exec',
   'https://script.google.com/macros/s/AKfycbxPDvlK5Xk2WgcEsbqZtUH-k69_Xj3oXU8ciOJP8Y3e0twb4O-T1rNwLWUUTsTt2tmu9A/exec',
 ];
-
-const normalizePlantType = (value: string): string => value.trim().replace(/\s+/g, ' ');
-
-const mergePlantTypes = (...groups: Array<readonly string[] | string[] | undefined>): string[] => {
-  const seen = new Set<string>();
-  const merged: string[] = [];
-
-  for (const group of groups) {
-    if (!group) {
-      continue;
-    }
-
-    for (const plantType of group) {
-      const normalized = normalizePlantType(plantType);
-      if (!normalized) {
-        continue;
-      }
-
-      const key = normalized.toLocaleLowerCase();
-      if (seen.has(key)) {
-        continue;
-      }
-
-      seen.add(key);
-      merged.push(normalized);
-    }
-  }
-
-  return merged;
-};
-
-const samePlantTypes = (left: string[], right: string[]): boolean =>
-  left.length === right.length && left.every((value, index) => value === right[index]);
 
 interface GridAnchor {
   lat: number;
@@ -238,20 +173,6 @@ const mapHealthToHcvWeight = (health: 'Sehat' | 'Merana' | 'Mati'): number => {
   return 0;
 };
 
-const describeHcvCondition = (health: 'Sehat' | 'Merana' | 'Mati', hcvValue: number): string => {
-  const roundedValue = Math.round(hcvValue * 100) / 100;
-
-  if (health === 'Sehat') {
-    return `Nilai HCV ${roundedValue} menunjukkan pohon berada pada kondisi baik dengan prioritas pemeliharaan rendah.`;
-  }
-
-  if (health === 'Merana') {
-    return `Nilai HCV ${roundedValue} menunjukkan pohon perlu perhatian lanjutan karena terindikasi merana dan butuh monitoring berkala.`;
-  }
-
-  return `Nilai HCV ${roundedValue} menunjukkan pohon dalam kondisi kritis sehingga perlu evaluasi lapangan dan tindakan penggantian atau perawatan segera.`;
-};
-
 const toHcvInputFromAI = (aiHealth?: PlantHealthResult | null): number | undefined => {
   if (!aiHealth) {
     return undefined;
@@ -265,10 +186,7 @@ const toHcvInputFromAI = (aiHealth?: PlantHealthResult | null): number | undefin
 
 const App: React.FC = () => {
   const [entries, setEntries] = useState<PlantEntry[]>([]);
-  const [gisEntries, setGisEntries] = useState<PlantEntry[]>([]);
   const [isBottomSheetOpen, setBottomSheetOpen] = useState(false);
-  const [bottomSheetTabRequest, setBottomSheetTabRequest] = useState<BottomSheetTabRequest | null>(null);
-  const [hcvInsightSelection, setHcvInsightSelection] = useState<HcvInsightSelection | null>(null);
   const [toast, setToast] = useState<ToastState | null>(null);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [isSyncing, setIsSyncing] = useState(false);
@@ -276,7 +194,6 @@ const App: React.FC = () => {
   const [totalEntriesCount, setTotalEntriesCount] = useState(0);
   const [pendingEntriesCount, setPendingEntriesCount] = useState(0);
   const syncInProgressRef = useRef(false);
-  const storageToastLevelRef = useRef<'warning' | 'critical' | null>(null);
 
   const [formState, setFormState] = useLocalStorage<FormState>('formState', {
     tinggi: 30,
@@ -290,73 +207,13 @@ const App: React.FC = () => {
     spacingX: 4,
     spacingY: 4,
   });
-  const [plantTypes, setPlantTypes] = useLocalStorage<string[]>('plantTypes', [...DEFAULT_PLANT_TYPES]);
   const [gridAnchor, setGridAnchor] = useLocalStorage<GridAnchor | null>('gridAnchor', null);
-  const [syncMode, setSyncMode] = useLocalStorage<SyncMode>('syncMode', 'fast'); // 'fast' | 'lite' | 'hyperlink'
-  const [autoBackupIntervalMinutes, setAutoBackupIntervalMinutes] = useLocalStorage<AutoBackupIntervalMinutes>('autoBackupIntervalMinutes', 0);
-  const [lastSpreadsheetBackupAt, setLastSpreadsheetBackupAt] = useLocalStorage<string | null>('lastSpreadsheetBackupAt', null);
-  const [lastSpreadsheetBackupReminderAt, setLastSpreadsheetBackupReminderAt] = useLocalStorage<string | null>('lastSpreadsheetBackupReminderAt', null);
-  const [lastLocalMutationAt, setLastLocalMutationAt] = useLocalStorage<string | null>('lastLocalMutationAt', null);
-  const [appsScriptConfigVersion, setAppsScriptConfigVersion] = useLocalStorage<string>('appsScriptConfigVersion', '');
 
   const [gps, setGps] = useState<GpsLocation | null>(null);
   const [appsScriptUrl, setAppsScriptUrl] = useLocalStorage<string>(
     'appsScriptUrl',
     DEFAULT_APPS_SCRIPT_URL,
   );
-  const [storageStatus, setStorageStatus] = useState<BrowserStorageStatus | null>(null);
-  const [viewMode, setViewMode] = useState<ViewMode>('camera');
-  const [isSpreadsheetBackupRunning, setIsSpreadsheetBackupRunning] = useState(false);
-  const spreadsheetBackupInProgressRef = useRef(false);
-
-  const toggleViewMode = useCallback((mode: ViewMode) => {
-    setViewMode(mode);
-  }, []); // Toggle between camera/gis
-
-  const availablePlantTypes = useMemo(
-    () => mergePlantTypes(DEFAULT_PLANT_TYPES, plantTypes),
-    [plantTypes],
-  );
-
-  const handleShowHcvInsight = useCallback((result: PlantHealthResult, source: HcvInsightSelection['source']) => {
-    setHcvInsightSelection({
-      source,
-      health: result.health,
-      confidence: result.confidence,
-      hue: result.hue,
-      saturation: result.saturation,
-      value: result.value,
-    });
-    setBottomSheetTabRequest({
-      tabId: 'hcv',
-      requestKey: `${source}-${Date.now()}`,
-    });
-    setBottomSheetOpen(true);
-  }, []);
-
-  useEffect(() => {
-    if (isBottomSheetOpen) {
-      return;
-    }
-
-    const mergedPlantTypes = mergePlantTypes(DEFAULT_PLANT_TYPES, plantTypes, [formState.jenis]);
-    if (!samePlantTypes(plantTypes, mergedPlantTypes)) {
-      setPlantTypes(mergedPlantTypes);
-    }
-  }, [formState.jenis, isBottomSheetOpen, plantTypes, setPlantTypes]);
-
-  const registerPlantType = useCallback((value: string) => {
-    const normalized = normalizePlantType(value);
-    if (!normalized) {
-      return;
-    }
-
-    setFormState((prev) => (prev.jenis === normalized ? prev : { ...prev, jenis: normalized }));
-    setPlantTypes((prev) => {
-      const mergedPlantTypes = mergePlantTypes(DEFAULT_PLANT_TYPES, prev, [normalized]);
-      return samePlantTypes(prev, mergedPlantTypes) ? prev : mergedPlantTypes;
-    });
-  }, [setFormState, setPlantTypes]);
 
   useEffect(() => {
     const current = String(appsScriptUrl || '').trim();
@@ -364,38 +221,6 @@ const App: React.FC = () => {
       setAppsScriptUrl(DEFAULT_APPS_SCRIPT_URL);
     }
   }, [appsScriptUrl, setAppsScriptUrl]);
-
-  useEffect(() => {
-    if (appsScriptConfigVersion === APPS_SCRIPT_CONFIG_VERSION) {
-      return;
-    }
-
-    setAppsScriptUrl(DEFAULT_APPS_SCRIPT_URL);
-    setAppsScriptConfigVersion(APPS_SCRIPT_CONFIG_VERSION);
-  }, [appsScriptConfigVersion, setAppsScriptConfigVersion, setAppsScriptUrl]);
-
-  useEffect(() => {
-    if (!('storage' in navigator) || typeof navigator.storage.persist !== 'function') {
-      return;
-    }
-
-    void (async () => {
-      try {
-        const storageManager = navigator.storage as StorageManager & {
-          persisted?: () => Promise<boolean>;
-        };
-        const persisted = typeof storageManager.persisted === 'function'
-          ? await storageManager.persisted()
-          : false;
-
-        if (!persisted) {
-          await navigator.storage.persist();
-        }
-      } catch {
-        // Browser tertentu menolak tanpa gesture; cukup abaikan.
-      }
-    })();
-  }, []);
 
   useEffect(() => {
     const sx = Number(formState.spacingX);
@@ -425,230 +250,21 @@ const App: React.FC = () => {
     }
   }, []);
 
-  const refreshGisEntries = useCallback(async () => {
-    try {
-      const allEntries = await getAllEntries();
-      const sortedEntries = [...allEntries].sort((left, right) => {
-        const leftTime = new Date(left.timestamp).getTime();
-        const rightTime = new Date(right.timestamp).getTime();
-        return leftTime - rightTime;
-      });
-      setGisEntries(sortedEntries);
-    } catch (err) {
-      console.error('Gagal memuat data GIS:', err);
-    }
-  }, []);
-
-  const refreshBrowserStorage = useCallback(async () => {
-    if (!('storage' in navigator) || typeof navigator.storage?.estimate !== 'function') {
-      setStorageStatus({
-        usageBytes: 0,
-        quotaBytes: 0,
-        remainingBytes: 0,
-        usageRatio: 0,
-        level: 'unsupported',
-      });
-      return;
-    }
-
-    try {
-      const estimate = await navigator.storage.estimate();
-      const usageBytes = estimate.usage ?? 0;
-      const quotaBytes = estimate.quota ?? 0;
-      const usageRatio = quotaBytes > 0 ? usageBytes / quotaBytes : 0;
-      const remainingBytes = Math.max(0, quotaBytes - usageBytes);
-
-      let level: BrowserStorageStatus['level'] = 'normal';
-      if (usageRatio >= STORAGE_CRITICAL_RATIO) {
-        level = 'critical';
-      } else if (usageRatio >= STORAGE_WARNING_RATIO) {
-        level = 'warning';
-      }
-
-      setStorageStatus({
-        usageBytes,
-        quotaBytes,
-        remainingBytes,
-        usageRatio,
-        level,
-      });
-    } catch (error) {
-      console.error('Gagal membaca kapasitas browser:', error);
-      setStorageStatus(null);
-    }
+  // Initialize sync service on app start
+  useEffect(() => {
+    initSync().catch((err) => {
+      console.error('Failed to initialize sync:', err);
+    });
   }, []);
 
   useEffect(() => {
     void refreshActiveEntries();
   }, [refreshActiveEntries]);
 
-  useEffect(() => {
-    if (viewMode !== 'gis') {
-      return;
-    }
-    void refreshGisEntries();
-  }, [viewMode, totalEntriesCount, pendingEntriesCount, refreshGisEntries]);
-
-  useEffect(() => {
-    void refreshBrowserStorage();
-  }, [refreshBrowserStorage, totalEntriesCount, pendingEntriesCount]);
-
   const showToast = useCallback((message: string, type: 'success' | 'error' | 'info' = 'info', duration: number = 3000) => {
     setToast({ message, type });
     setTimeout(() => setToast(null), duration);
   }, []);
-
-  const noteLocalDataMutation = useCallback(() => {
-    const now = new Date().toISOString();
-    setLastLocalMutationAt(now);
-    setLastSpreadsheetBackupReminderAt(null);
-  }, [setLastLocalMutationAt, setLastSpreadsheetBackupReminderAt]);
-
-  const runSpreadsheetBackup = useCallback(async (source: 'camera' | 'analytics' | 'settings' | 'scheduler') => {
-    if (spreadsheetBackupInProgressRef.current) {
-      if (source !== 'scheduler') {
-        showToast('Backup spreadsheet sedang berjalan.', 'info');
-      }
-      return false;
-    }
-
-    spreadsheetBackupInProgressRef.current = true;
-    setIsSpreadsheetBackupRunning(true);
-
-    try {
-      const allEntries = await getAllEntries();
-      if (allEntries.length === 0) {
-        if (source !== 'scheduler') {
-          showToast('Belum ada data untuk dibackup.', 'info');
-        }
-        return false;
-      }
-
-      const result = await exportSpreadsheetBackup(allEntries, {
-        preferShareSheet: isIOSFamilyDevice() && source !== 'scheduler',
-      });
-
-      setLastSpreadsheetBackupAt(new Date().toISOString());
-      setLastSpreadsheetBackupReminderAt(null);
-
-      if (source === 'scheduler') {
-        showToast('Auto-backup spreadsheet berhasil dijalankan.', 'success', 1800);
-        return true;
-      }
-
-      if (result.status === 'shared') {
-        showToast('Backup spreadsheet dibuka lewat sheet Bagikan.', 'success', 2200);
-        return true;
-      }
-
-      if (result.status === 'manual_required') {
-        showToast('iPhone memerlukan langkah manual. Cek sheet Bagikan atau izin unduhan.', 'info', 3600);
-        return true;
-      }
-
-      showToast('Backup spreadsheet berhasil diunduh.', 'success', 2200);
-      return true;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Backup spreadsheet gagal.';
-      console.error('Spreadsheet backup gagal:', error);
-      showToast(message || 'Backup spreadsheet gagal.', 'error', 3200);
-      return false;
-    } finally {
-      spreadsheetBackupInProgressRef.current = false;
-      setIsSpreadsheetBackupRunning(false);
-    }
-  }, [setLastSpreadsheetBackupAt, setLastSpreadsheetBackupReminderAt, showToast]);
-
-  const maybeRunScheduledBackup = useCallback(async () => {
-    if (autoBackupIntervalMinutes === 0 || document.visibilityState !== 'visible') {
-      return;
-    }
-
-    if (!lastLocalMutationAt) {
-      return;
-    }
-
-    const lastMutationAtMs = new Date(lastLocalMutationAt).getTime();
-    if (!Number.isFinite(lastMutationAtMs)) {
-      return;
-    }
-
-    const lastBackupAtMs = lastSpreadsheetBackupAt ? new Date(lastSpreadsheetBackupAt).getTime() : 0;
-    if (lastMutationAtMs <= lastBackupAtMs) {
-      return;
-    }
-
-    const intervalMs = autoBackupIntervalMinutes * 60 * 1000;
-    const nowMs = Date.now();
-    if (lastBackupAtMs > 0 && nowMs - lastBackupAtMs < intervalMs) {
-      return;
-    }
-
-    if (isIOSFamilyDevice()) {
-      const reminderAtMs = lastSpreadsheetBackupReminderAt ? new Date(lastSpreadsheetBackupReminderAt).getTime() : 0;
-      if (reminderAtMs > 0 && nowMs - reminderAtMs < intervalMs) {
-        return;
-      }
-
-      setLastSpreadsheetBackupReminderAt(new Date().toISOString());
-      showToast('iPhone memerlukan tap manual. Gunakan tombol Backup di panel kamera atau analitik.', 'info', 4200);
-      return;
-    }
-
-    await runSpreadsheetBackup('scheduler');
-  }, [
-    autoBackupIntervalMinutes,
-    lastLocalMutationAt,
-    lastSpreadsheetBackupAt,
-    lastSpreadsheetBackupReminderAt,
-    runSpreadsheetBackup,
-    setLastSpreadsheetBackupReminderAt,
-    showToast,
-  ]);
-
-  useEffect(() => {
-    const onVisible = () => {
-      if (document.visibilityState === 'visible') {
-        void refreshBrowserStorage();
-        void maybeRunScheduledBackup();
-      }
-    };
-
-    const interval = window.setInterval(() => {
-      void refreshBrowserStorage();
-      void maybeRunScheduledBackup();
-    }, AUTO_BACKUP_CHECK_INTERVAL_MS);
-
-    document.addEventListener('visibilitychange', onVisible);
-    return () => {
-      window.clearInterval(interval);
-      document.removeEventListener('visibilitychange', onVisible);
-    };
-  }, [maybeRunScheduledBackup, refreshBrowserStorage]);
-
-  useEffect(() => {
-    if (!storageStatus || storageStatus.level === 'normal' || storageStatus.level === 'unsupported') {
-      storageToastLevelRef.current = null;
-      return;
-    }
-
-    if (isOnline) {
-      return;
-    }
-
-    if (storageToastLevelRef.current === storageStatus.level) {
-      return;
-    }
-
-    storageToastLevelRef.current = storageStatus.level;
-    showToast(
-      storageStatus.level === 'critical'
-        ? 'Penyimpanan browser hampir penuh. Gunakan export ZIP atau pastikan download otomatis aktif.'
-        : 'Penyimpanan browser mulai penuh. Disarankan backup lewat ZIP atau CSV dari menu panel.',
-      storageStatus.level === 'critical' ? 'error' : 'info',
-      5500,
-    );
-  }, [isOnline, showToast, storageStatus]);
 
   const updateOnlineState = useCallback((nextValue: boolean) => {
     setIsOnline((prev) => {
@@ -727,13 +343,8 @@ const App: React.FC = () => {
     showToast('Titik awal grid tidak valid, otomatis direset.', 'info');
   }, [gridAnchor, setGridAnchor, showToast]);
 
-  const syncPendingEntries = useCallback(async (options?: { background?: boolean; force?: boolean }) => {
+  const syncPendingEntries = useCallback(async (options?: { background?: boolean }) => {
     const isBackground = options?.background ?? false;
-    const forceSync = options?.force ?? false;
-
-    if (isBackground && syncMode !== 'fast') {
-      return;
-    }
 
     if (syncInProgressRef.current) {
       return;
@@ -746,7 +357,10 @@ const App: React.FC = () => {
         return false;
       }
 
-      const nowMs = Date.now();
+      if (!entry.lastSyncAttemptAt) {
+        return true;
+      }
+
       const retryCount = entry.retryCount || 0;
       const lastAttemptMs = new Date(entry.lastSyncAttemptAt).getTime();
       if (!Number.isFinite(lastAttemptMs)) {
@@ -759,10 +373,7 @@ const App: React.FC = () => {
 
     if (pending.length === 0) {
       if (!isBackground) {
-        showToast(
-          forceSync ? 'Tidak ada data pending untuk sinkronisasi.' : 'Belum ada data siap retry. Tunggu jeda retry selesai.',
-          'info',
-        );
+        showToast('Belum ada data siap retry. Tunggu jeda retry selesai.', 'info');
       }
       return;
     }
@@ -784,8 +395,6 @@ const App: React.FC = () => {
     let successCount = 0;
     let unconfirmedCount = 0;
     let failedCount = 0;
-    let driveWarningCount = 0;
-    let firstDriveWarningMessage = '';
     let lastErrorMessage = '';
     try {
       for (const entry of pending) {
@@ -808,12 +417,6 @@ const App: React.FC = () => {
               lastSyncError: '',
             });
             successCount++;
-            if (result.warning) {
-              driveWarningCount += 1;
-              if (!firstDriveWarningMessage) {
-                firstDriveWarningMessage = result.warning;
-              }
-            }
           } else {
             const nextRetry = (entry.retryCount || 0) + 1;
             await updateEntrySyncMeta(entry.id, {
@@ -845,11 +448,6 @@ const App: React.FC = () => {
         if (unconfirmedCount > 0) {
           const prefix = successCount > 0 ? `${successCount} data terverifikasi.` : 'Belum ada data terverifikasi.';
           showToast(`${prefix} ${unconfirmedCount} data masih pending verifikasi.`, 'info');
-        } else if (driveWarningCount > 0) {
-          const warningSuffix = driveWarningCount > 1
-            ? `${firstDriveWarningMessage} (${driveWarningCount} foto bermasalah)`
-            : firstDriveWarningMessage;
-          showToast(`${successCount} data tersimpan ke cloud. ${warningSuffix}`, 'info', 4200);
         } else {
           showToast(
             isBackground ? `Auto-sync berhasil untuk ${successCount} data.` : `${successCount} data berhasil diunggah`,
@@ -867,28 +465,14 @@ const App: React.FC = () => {
       setIsSyncing(false);
       syncInProgressRef.current = false;
     }
-  }, [appsScriptUrl, showToast, isOnline, refreshActiveEntries, syncMode]);
+  }, [appsScriptUrl, showToast, isOnline, refreshActiveEntries]);
 
   useEffect(() => {
-    if (!isOnline || syncMode !== 'fast') {
+    if (!isOnline) {
       return;
     }
     void syncPendingEntries({ background: true });
-  }, [isOnline, syncMode, syncPendingEntries]);
-
-  useEffect(() => {
-    if (!isOnline || syncMode !== 'fast') {
-      return;
-    }
-
-    const intervalId = window.setInterval(() => {
-      void syncPendingEntries({ background: true });
-    }, FAST_SYNC_INTERVAL_MS);
-
-    return () => {
-      window.clearInterval(intervalId);
-    };
-  }, [isOnline, syncMode, syncPendingEntries]);
+  }, [isOnline, syncPendingEntries]);
 
   const liveCoordinate = useMemo(() => {
     if (!isValidGpsLocation(gps)) {
@@ -924,7 +508,7 @@ const App: React.FC = () => {
 
   useEffect(() => {
     const onVisible = () => {
-      if (document.visibilityState === 'visible' && isOnline && syncMode === 'fast') {
+      if (document.visibilityState === 'visible' && isOnline) {
         void syncPendingEntries({ background: true });
       }
     };
@@ -933,7 +517,7 @@ const App: React.FC = () => {
     return () => {
       document.removeEventListener('visibilitychange', onVisible);
     };
-  }, [isOnline, syncMode, syncPendingEntries]);
+  }, [isOnline, syncPendingEntries]);
 
   const handleCapture = useCallback(async (dataUrl: string, aiHealth?: PlantHealthResult | null, thumbnailDataUrl?: string, mode?: 'manual' | 'ai') => {
     const timestamp = new Date();
@@ -983,10 +567,6 @@ const App: React.FC = () => {
     // Fallback: jika AI tidak menganalisis (aiHealth null), hitung HCV dari kesehatan manual
     const hcvInput = toHcvInputFromAI(aiHealth)
       ?? (mapHealthToHcvWeight(kesehatanFinal as 'Sehat' | 'Merana' | 'Mati') * 50);
-    const hcvDescription = describeHcvCondition(
-      kesehatanFinal as 'Sehat' | 'Merana' | 'Mati',
-      hcvInput,
-    );
 
     // Deteksi mode: jika AI height mode aktif, mode = 'ai', jika tidak, 'manual'
     // (Jika ingin lebih spesifik, bisa tambahkan prop dari CameraView, di sini asumsikan AI height mode = false berarti manual)
@@ -1028,7 +608,6 @@ const App: React.FC = () => {
       aiConfidence: Number.isFinite(aiConfidence) ? aiConfidence : undefined,
       aiDeskripsi: aiHealth ? generateHealthDescription(aiHealth) : undefined,
       hcvInput,
-      hcvDescription,
       mode,
     };
 
@@ -1037,38 +616,31 @@ const App: React.FC = () => {
       
       // Injeksi data EXIF ke biner gambar
       const photoWithExif = await writeExifData(dataUrl, newEntryMeta);
-      const finalPhoto = isLikelyValidImageDataUrl(photoWithExif) ? photoWithExif : dataUrl;
-      if (finalPhoto !== photoWithExif) {
-        console.warn('Hasil EXIF tidak valid, fallback ke foto asli sebelum upload.');
-      }
-
-      const finalEntry: PlantEntry = { ...newEntryMeta, foto: finalPhoto };
+      
+      const finalEntry: PlantEntry = { ...newEntryMeta, foto: photoWithExif };
       const previewEntry: PlantEntry = {
         ...finalEntry,
         foto: finalEntry.thumbnail || finalEntry.foto,
       };
 
-      // Always save to browser storage first so offline mode stays reliable.
+      // Save entry to local database
       await saveEntry(finalEntry);
-      noteLocalDataMutation();
-
+      
+      // Check if online and add to sync queue accordingly
       const isOnlineNow = await checkInternetConnection();
-      const shouldAttemptImmediateUpload = syncMode === 'fast' && isOnlineNow;
-
-      setEntries((prev) => [previewEntry, ...prev].slice(0, MAX_ACTIVE_ENTRIES));
-      setTotalEntriesCount((prev) => prev + 1);
-      setPendingEntriesCount((prev) => prev + 1);
-
-      if (!isOnlineNow) {
-        showToast(
-          syncMode === 'fast'
-            ? 'Data disimpan offline. Mode Fast akan kirim otomatis saat koneksi kembali.'
-            : 'Data disimpan offline. Mode Lite mengharuskan sync manual dari menu panel.',
-          'info',
-          3200,
-        );
-      } else if (syncMode === 'lite') {
-        showToast('Mode Lite aktif. Data disimpan lokal, kirim manual dari menu Sync.', 'info', 3200);
+      if (isOnlineNow) {
+        // Online: try to upload immediately
+        setEntries((prev) => [previewEntry, ...prev].slice(0, MAX_ACTIVE_ENTRIES));
+        setTotalEntriesCount((prev) => prev + 1);
+        setPendingEntriesCount((prev) => prev + 1);
+      } else {
+        // Offline: add to sync queue
+        await addToSyncQueue(finalEntry, 'create');
+        finalEntry.uploaded = false;
+        setEntries((prev) => [previewEntry, ...prev].slice(0, MAX_ACTIVE_ENTRIES));
+        setTotalEntriesCount((prev) => prev + 1);
+        setPendingEntriesCount((prev) => prev + 1);
+        showToast('Data disimpan offline. Akan disinkronkan saat koneksi tersedia.', 'info', 3000);
       }
 
       const fileName = `TREE_${formState.jenis.toUpperCase()}_${id}.jpg`;
@@ -1076,7 +648,7 @@ const App: React.FC = () => {
       // iPhone/iPad: buka sheet Bagikan/Simpan agar kompatibel dengan policy Safari iOS.
       if (isIOSFamilyDevice() && typeof navigator.share === 'function') {
         try {
-          const imageFile = await dataUrlToFile(finalPhoto, fileName);
+          const imageFile = await dataUrlToFile(photoWithExif, fileName);
           const canShare =
             typeof navigator.canShare === 'function' && navigator.canShare({ files: [imageFile] });
 
@@ -1088,7 +660,7 @@ const App: React.FC = () => {
             });
             showToast('Sheet Bagikan/Simpan dibuka.', 'success', 1500);
           } else {
-            const preview = window.open(finalPhoto, '_blank');
+            const preview = window.open(photoWithExif, '_blank');
             if (!preview) {
               showToast('Popup diblokir. Silakan izinkan popup untuk menyimpan foto.', 'error');
             } else {
@@ -1100,7 +672,7 @@ const App: React.FC = () => {
           if (shareError instanceof DOMException && shareError.name === 'AbortError') {
             showToast('Bagikan dibatalkan pengguna.', 'info', 1500);
           } else {
-            const preview = window.open(finalPhoto, '_blank');
+            const preview = window.open(photoWithExif, '_blank');
             if (!preview) {
               showToast('Gagal membuka bagikan/simpan foto.', 'error');
             } else {
@@ -1111,14 +683,14 @@ const App: React.FC = () => {
       } else {
         // Android/Desktop: tetap auto-download.
         const downloadLink = document.createElement('a');
-        downloadLink.href = finalPhoto;
+        downloadLink.href = photoWithExif;
         downloadLink.download = fileName;
         document.body.appendChild(downloadLink);
         downloadLink.click();
         document.body.removeChild(downloadLink);
       }
 
-      if (appsScriptUrl && shouldAttemptImmediateUpload) {
+      if (appsScriptUrl && isOnline) {
         showToast('Mengirim ke Cloud...', 'info');
         try {
           const attemptAt = new Date().toISOString();
@@ -1141,7 +713,7 @@ const App: React.FC = () => {
             setEntries(prev => prev.map(e => e.id === finalEntry.id ? { ...e, uploaded: true, retryCount: 0, lastSyncError: '' } : e));
             setPendingEntriesCount((prev) => Math.max(0, prev - 1));
             setLastSyncAt(new Date().toISOString());
-            showToast(result.warning || 'Berhasil Tersinkron!', result.warning ? 'info' : 'success');
+            showToast('Berhasil Tersinkron!', 'success');
           } else {
             await updateEntrySyncMeta(finalEntry.id, {
               uploaded: false,
@@ -1163,8 +735,6 @@ const App: React.FC = () => {
           console.error('Sinkronisasi capture gagal:', error);
           showToast(message || 'Gagal Sinkron, Tersimpan Lokal.', 'error');
         }
-
-        void syncPendingEntries({ background: true });
       } else {
         showToast('Tersimpan dengan Geotag.', 'success');
       }
@@ -1172,17 +742,14 @@ const App: React.FC = () => {
       console.error(error);
       showToast('Gagal memproses gambar.', 'error');
     }
-  }, [formState, gps, gridAnchor, totalEntriesCount, appsScriptUrl, noteLocalDataMutation, showToast, syncMode, syncPendingEntries]);
+  }, [formState, gps, gridAnchor, totalEntriesCount, appsScriptUrl, showToast, isOnline]);
 
   const handleClearData = async () => {
     if (window.confirm('Hapus semua data dari database lokal?')) {
       await clearAllEntries();
       setEntries([]);
-      setGisEntries([]);
       setTotalEntriesCount(0);
       setPendingEntriesCount(0);
-      setLastLocalMutationAt(null);
-      setLastSpreadsheetBackupReminderAt(null);
       showToast('Database dibersihkan.', 'success');
     }
   };
@@ -1192,88 +759,42 @@ const App: React.FC = () => {
 
   return (
     <div className="w-screen h-[100dvh] min-h-[100dvh] overflow-hidden bg-black text-slate-800">
-      {/* Hyperlink mode: tampilkan link khusus jika syncMode === 'hyperlink' */}
-      {syncMode === 'hyperlink' && (
-        <div className="flex flex-col items-center justify-center h-full p-8">
-          <a
-            href="https://cameraoffline.montana-tech.info/"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-blue-600 underline text-lg font-semibold mb-4"
-          >
-            Buka Camera Offline Montana
-          </a>
-          <p className="text-slate-700 text-center">Mode Offline Aktif</p>
-        </div>
-      )}
-      {syncMode !== 'hyperlink' && (
-        <>
-          {viewMode === 'camera' ? (
-            <CameraView 
-              onCapture={handleCapture}
-              formState={formState}
-              onFormStateChange={setFormState}
-              plantTypes={availablePlantTypes}
-              entriesCount={totalEntriesCount}
-              pendingCount={pendingEntriesCount}
-              isSyncing={isSyncing}
-              lastSyncAt={lastSyncAt}
-              gps={gps}
-              onGpsUpdate={setGps}
-              onShowSheet={() => setBottomSheetOpen(true)}
-              onHealthBadgeClick={(result) => handleShowHcvInsight(result, 'camera-ai')}
-              showToast={showToast}
-              isOnline={isOnline}
-              syncMode={syncMode}
-              onSyncModeChange={setSyncMode}
-              gridAnchor={gridAnchor}
-              distanceFromAnchorM={distanceFromAnchorM}
-              effectiveCoordinate={liveCoordinate}
-              onSetGridAnchor={handleSetGridAnchor}
-              onClearGridAnchor={handleClearGridAnchor}
-              onBackupNow={() => { void runSpreadsheetBackup('camera'); }}
-              isBackupRunning={isSpreadsheetBackupRunning}
-              onToggleViewMode={toggleViewMode}
-            />
-          ) : (
-            <MapView 
-              entries={gisEntries}
-              onBack={() => setViewMode('camera')}
-              pendingCount={pendingEntriesCount}
-              totalEntriesCount={totalEntriesCount}
-            />
-          )}
-          <BottomSheet
-            isOpen={isBottomSheetOpen}
-            onClose={() => setBottomSheetOpen(false)}
-            entries={entries}
-            totalEntriesCount={totalEntriesCount}
-            pendingEntriesCount={pendingEntriesCount}
-            formState={formState}
-            onFormStateChange={setFormState}
-            plantTypes={availablePlantTypes}
-            onRegisterPlantType={registerPlantType}
-            onClearData={handleClearData}
-            appsScriptUrl={appsScriptUrl}
-            onAppsScriptUrlChange={setAppsScriptUrl}
-            syncMode={syncMode}
-            onSyncModeChange={setSyncMode}
-            storageStatus={storageStatus}
-            tabRequest={bottomSheetTabRequest}
-            hcvInsightSelection={hcvInsightSelection}
-            onSelectHealthInsight={(result) => handleShowHcvInsight(result, 'analytics-ai')}
-            showToast={showToast}
-            gps={gps}
-            onGpsUpdate={setGps}
-            onSyncPending={syncPendingEntries}
-            isOnline={isOnline}
-            onBackupNow={() => { void runSpreadsheetBackup('analytics'); }}
-            isBackupRunning={isSpreadsheetBackupRunning}
-            autoBackupIntervalMinutes={autoBackupIntervalMinutes}
-            onAutoBackupIntervalChange={setAutoBackupIntervalMinutes}
-          />
-        </>
-      )}
+      <CameraView 
+        onCapture={handleCapture}
+        formState={formState}
+        onFormStateChange={setFormState}
+        entriesCount={totalEntriesCount}
+        pendingCount={pendingEntriesCount}
+        isSyncing={isSyncing}
+        lastSyncAt={lastSyncAt}
+        gps={gps}
+        onGpsUpdate={setGps}
+        onShowSheet={() => setBottomSheetOpen(true)}
+        showToast={showToast}
+        isOnline={isOnline}
+        gridAnchor={gridAnchor}
+        distanceFromAnchorM={distanceFromAnchorM}
+        effectiveCoordinate={liveCoordinate}
+        onSetGridAnchor={handleSetGridAnchor}
+        onClearGridAnchor={handleClearGridAnchor}
+      />
+      <BottomSheet
+        isOpen={isBottomSheetOpen}
+        onClose={() => setBottomSheetOpen(false)}
+        entries={entries}
+        totalEntriesCount={totalEntriesCount}
+        pendingEntriesCount={pendingEntriesCount}
+        formState={formState}
+        onFormStateChange={setFormState}
+        onClearData={handleClearData}
+        appsScriptUrl={appsScriptUrl}
+        onAppsScriptUrlChange={setAppsScriptUrl}
+        showToast={showToast}
+        gps={gps}
+        onGpsUpdate={setGps}
+        onSyncPending={syncPendingEntries}
+        isOnline={isOnline}
+      />
       {toast && <Toast message={toast.message} type={toast.type} />}
     </div>
   );

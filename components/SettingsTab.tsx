@@ -2,50 +2,16 @@
 import React, { useEffect, useState } from 'react';
 import { getAllEntries } from '../services/dbService';
 import { exportToCSV, exportToZIP, exportToKMZ } from '../services/exportService';
-import { type AutoBackupIntervalMinutes, type BrowserStorageStatus, type SyncMode } from '../types';
 
 interface SettingsTabProps {
   appsScriptUrl: string;
   onAppsScriptUrlChange: (url: string) => void;
-  syncMode: SyncMode;
-  onSyncModeChange: React.Dispatch<React.SetStateAction<SyncMode>>;
-  storageStatus: BrowserStorageStatus | null;
   onClearData: () => void;
-  autoBackupIntervalMinutes: AutoBackupIntervalMinutes;
-  onAutoBackupIntervalChange: React.Dispatch<React.SetStateAction<AutoBackupIntervalMinutes>>;
-  onSpreadsheetBackupNow: () => void;
-  isSpreadsheetBackupRunning: boolean;
 }
 
 const HEIGHT_MODE_KEY = 'camera-montana-height-mode-v1';
-const HEIGHT_AI_BEHAVIOR_KEY = 'camera-montana-height-ai-behavior-v1';
 
-const formatBytes = (value: number): string => {
-  if (!Number.isFinite(value) || value <= 0) return '0 B';
-  const units = ['B', 'KB', 'MB', 'GB'];
-  let size = value;
-  let unitIndex = 0;
-
-  while (size >= 1024 && unitIndex < units.length - 1) {
-    size /= 1024;
-    unitIndex += 1;
-  }
-
-  return `${size >= 10 || unitIndex === 0 ? size.toFixed(0) : size.toFixed(1)} ${units[unitIndex]}`;
-};
-
-export const SettingsTab: React.FC<SettingsTabProps> = ({
-  appsScriptUrl,
-  onAppsScriptUrlChange,
-  syncMode,
-  onSyncModeChange,
-  storageStatus,
-  onClearData,
-  autoBackupIntervalMinutes,
-  onAutoBackupIntervalChange,
-  onSpreadsheetBackupNow,
-  isSpreadsheetBackupRunning,
-}) => {
+export const SettingsTab: React.FC<SettingsTabProps> = ({ appsScriptUrl, onAppsScriptUrlChange, onClearData }) => {
   const isSecure = window.isSecureContext;
   // Pengaturan mode pengukuran tinggi
   const [heightMode, setHeightMode] = useState<'ai' | 'slider' | 'pixel-scale'>(() => {
@@ -55,24 +21,12 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
     } catch {}
     return 'slider';
   });
-  const [heightAiBehavior, setHeightAiBehavior] = useState<'suggestion' | 'automatic'>(() => {
-    try {
-      const saved = window.localStorage.getItem(HEIGHT_AI_BEHAVIOR_KEY);
-      if (saved === 'suggestion' || saved === 'automatic') return saved;
-    } catch {}
-    return 'suggestion';
-  });
 
   useEffect(() => {
     try {
       window.localStorage.setItem(HEIGHT_MODE_KEY, heightMode);
     } catch {}
   }, [heightMode]);
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(HEIGHT_AI_BEHAVIOR_KEY, heightAiBehavior);
-    } catch {}
-  }, [heightAiBehavior]);
   const [exportState, setExportState] = React.useState<{
     mode: 'csv' | 'kmz' | 'zip' | null;
     current: number;
@@ -134,7 +88,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
           <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest px-1">Metode Pengukuran Tinggi</label>
           <div className="flex gap-2 mt-2">
             <button
-              className={`px-3 py-2 rounded-xl border text-[10px] font-black uppercase tracking-wide transition-all ${heightMode === 'ai' ? 'bg-emerald-500/20 border-emerald-300/35 text-emerald-900' : 'bg-white border-slate-200 text-slate-700'}`}
+              className={`px-3 py-2 rounded-xl border text-[10px] font-black uppercase tracking-wide transition-all ${heightMode === 'ai' ? 'bg-cyan-500/20 border-cyan-300/35 text-cyan-900' : 'bg-white border-slate-200 text-slate-700'}`}
               onClick={() => setHeightMode('ai')}
               type="button"
             ><svg className="w-4 h-4 inline-block mr-1" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2a2 2 0 0 1 2 2c0 .74-.4 1.39-1 1.73V7h1a7 7 0 0 1 7 7h1a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1h-1v1a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-1H2a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1h1a7 7 0 0 1 7-7h1V5.73c-.6-.34-1-.99-1-1.73a2 2 0 0 1 2-2z"/></svg>AI</button>
@@ -149,31 +103,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
               type="button"
             ><svg className="w-4 h-4 inline-block mr-1" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 6H3a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h18a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2z"/><line x1="6" y1="12" x2="6" y2="16"/><line x1="10" y1="12" x2="10" y2="16"/><line x1="14" y1="12" x2="14" y2="16"/></svg>Pixel Scale</button>
           </div>
-          {heightMode === 'ai' && (
-            <div className="space-y-2 rounded-2xl border border-emerald-100 bg-emerald-50/80 p-3">
-              <p className="text-[10px] font-black text-emerald-800 uppercase tracking-widest">Perilaku AI Tinggi</p>
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={() => setHeightAiBehavior('suggestion')}
-                  className={`px-3 py-2 rounded-xl border text-[10px] font-black uppercase tracking-wide transition-all ${heightAiBehavior === 'suggestion' ? 'bg-white border-emerald-300 text-emerald-900' : 'bg-transparent border-emerald-100 text-emerald-700'}`}
-                >
-                  Saran
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setHeightAiBehavior('automatic')}
-                  className={`px-3 py-2 rounded-xl border text-[10px] font-black uppercase tracking-wide transition-all ${heightAiBehavior === 'automatic' ? 'bg-emerald-500 border-emerald-500 text-white' : 'bg-transparent border-emerald-100 text-emerald-700'}`}
-                >
-                  Otomatis
-                </button>
-              </div>
-              <p className="text-[9px] text-emerald-800/80 leading-relaxed">
-                Saran menampilkan hasil AI atau fallback riwayat tanpa langsung mengubah kolom tinggi. Otomatis hanya mengisi kolom tinggi bila AI visual berhasil membaca tanaman.
-              </p>
-            </div>
-          )}
-          <p className="mt-2 text-[9px] text-slate-500">Pilihan ini akan mempengaruhi tampilan panel kamera, visibilitas slider manual, dan cara AI mengisi tinggi tanaman.</p>
+          <p className="mt-2 text-[9px] text-slate-500">Pilihan ini akan mempengaruhi tampilan panel kamera dan metode pengukuran tinggi yang digunakan.</p>
         </div>
       </section>
 
@@ -184,38 +114,6 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
           <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Sinkronisasi Cloud</h4>
         </div>
         <div className="space-y-3 bg-slate-50 p-5 rounded-3xl border border-slate-100">
-          <div className="space-y-2">
-            <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest px-1">Mode Pengiriman Data</label>
-<div className="grid grid-cols-3 gap-2">
-              <button
-                type="button"
-                onClick={() => onSyncModeChange('fast')}
-                className={`px-3 py-3 rounded-2xl border text-[10px] font-black uppercase tracking-wide transition-all ${syncMode === 'fast' ? 'bg-sky-500/20 border-sky-300/35 text-sky-900' : 'bg-white border-slate-200 text-slate-700'}`}
-              >
-                Fast
-              </button>
-              <button
-                type="button"
-                onClick={() => onSyncModeChange('lite')}
-                className={`px-3 py-3 rounded-2xl border text-[10px] font-black uppercase tracking-wide transition-all ${syncMode === 'lite' ? 'bg-slate-700/15 border-slate-300 text-slate-900' : 'bg-white border-slate-200 text-slate-700'}`}
-              >
-                Lite
-              </button>
-              <button
-                type="button"
-                onClick={() => onSyncModeChange('hyperlink')}
-                className={`px-3 py-3 rounded-2xl border text-[10px] font-black uppercase tracking-wide transition-all ${syncMode === 'hyperlink' ? 'bg-indigo-500/20 border-indigo-300/35 text-indigo-900' : 'bg-white border-slate-200 text-slate-700'}`}
-              >
-                Link
-              </button>
-            </div>
-            <p className="text-[9px] text-slate-500 leading-relaxed">
-              {syncMode === 'fast'
-                ? 'Fast menyimpan data lokal lalu mencoba kirim otomatis setiap koneksi tersedia.'
-                : 'Lite menyimpan data lokal saja. Pengiriman dilakukan manual dari menu Histori atau Sync.'}
-            </p>
-          </div>
-
           <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest px-1">URL Google Apps Script</label>
           <input 
             type="url" 
@@ -227,71 +125,12 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
         </div>
       </section>
 
-      <section className="space-y-4">
-        <div className="flex items-center gap-2 px-1">
-          <div className="w-2 h-2 rounded-full bg-cyan-500" />
-          <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Backup Spreadsheet</h4>
-        </div>
-        <div className="space-y-4 bg-slate-50 p-5 rounded-3xl border border-slate-100">
-          <div className="space-y-2">
-            <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest px-1">Interval Backup Saat App Aktif</label>
-            <div className="grid grid-cols-4 gap-2">
-              {([
-                { value: 0, label: 'Off' },
-                { value: 15, label: '15m' },
-                { value: 30, label: '30m' },
-                { value: 60, label: '60m' },
-              ] as const).map((option) => (
-                <button
-                  key={option.value}
-                  type="button"
-                  onClick={() => onAutoBackupIntervalChange(option.value)}
-                  className={`px-3 py-3 rounded-2xl border text-[10px] font-black uppercase tracking-wide transition-all ${autoBackupIntervalMinutes === option.value ? 'bg-cyan-500/20 border-cyan-300/35 text-cyan-900' : 'bg-white border-slate-200 text-slate-700'}`}
-                >
-                  {option.label}
-                </button>
-              ))}
-            </div>
-            <p className="text-[9px] text-slate-500 leading-relaxed">
-              Backup file berjalan hanya saat aplikasi masih terbuka. Pada iPhone, sistem akan memberi pengingat untuk tap backup manual karena Safari sering memblokir auto-download.
-            </p>
-          </div>
-
-          <button
-            type="button"
-            onClick={onSpreadsheetBackupNow}
-            disabled={isSpreadsheetBackupRunning}
-            className="w-full p-5 bg-white border border-cyan-100 rounded-3xl text-xs font-black text-cyan-800 active:scale-[0.98] transition-all flex justify-between items-center shadow-sm hover:border-cyan-200 hover:shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {isSpreadsheetBackupRunning ? 'MENYIAPKAN BACKUP...' : 'BACKUP SPREADSHEET SEKARANG'} <span className="text-xl">💾</span>
-          </button>
-        </div>
-      </section>
-
       {/* Export Section */}
       <section className="space-y-4">
         <div className="flex items-center gap-2 px-1">
           <div className="w-2 h-2 rounded-full bg-emerald-500" />
           <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Ekspor Massal</h4>
         </div>
-        {storageStatus && storageStatus.level !== 'normal' && storageStatus.level !== 'unsupported' && (
-          <div className={`rounded-[2rem] border px-4 py-4 space-y-2 ${storageStatus.level === 'critical' ? 'bg-red-50 border-red-100' : 'bg-amber-50 border-amber-100'}`}>
-            <div className="flex items-center justify-between gap-3">
-              <p className={`text-[10px] font-black uppercase tracking-wider ${storageStatus.level === 'critical' ? 'text-red-700' : 'text-amber-700'}`}>
-                Penyimpanan Browser
-              </p>
-              <p className={`text-[10px] font-black ${storageStatus.level === 'critical' ? 'text-red-700' : 'text-amber-700'}`}>
-                {Math.round(storageStatus.usageRatio * 100)}%
-              </p>
-            </div>
-            <p className={`text-[10px] font-semibold leading-relaxed ${storageStatus.level === 'critical' ? 'text-red-700' : 'text-amber-700'}`}>
-              Browser hampir penuh. Ruang tersisa {formatBytes(storageStatus.remainingBytes)} dari {formatBytes(storageStatus.quotaBytes)}.
-            </p>
-            <p className={`text-[9px] leading-relaxed ${storageStatus.level === 'critical' ? 'text-red-600' : 'text-amber-700'}`}>
-              Disarankan aktifkan izin download otomatis browser lalu backup data lewat export ZIP, KMZ, atau CSV di bawah ini.
-            </p>
-          </div>
-        )}
         {exportState.mode && (
           <div className="bg-emerald-50 border border-emerald-100 rounded-2xl px-4 py-3 space-y-2">
             <div className="flex items-center justify-between gap-3">

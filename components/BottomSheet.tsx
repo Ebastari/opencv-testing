@@ -1,11 +1,8 @@
 
-import React, { useEffect, useState, Suspense, lazy } from 'react';
-import { PlantEntry, GpsLocation, FormState, type AutoBackupIntervalMinutes, type BottomSheetTabRequest, type BrowserStorageStatus, type HcvInsightSelection, type SyncMode } from '../types';
+import React, { useState, Suspense, lazy } from 'react';
+import { PlantEntry, GpsLocation, FormState } from '../types';
 import { FormTab } from './FormTab';
 import { DataTab } from './DataTab';
-import { HcvTab } from './HcvTab';
-import { HelpTab } from './HelpTab';
-import type { PlantHealthResult } from '../ecology/plantHealth';
 
 const AnalyticsTab = lazy(() => import('./AnalyticsTab').then(m => ({ default: m.AnalyticsTab })));
 const SettingsTab = lazy(() => import('./SettingsTab').then(m => ({ default: m.SettingsTab })));
@@ -42,21 +39,6 @@ const IconCloud = () => (
   </svg>
 );
 
-const IconLeaf = () => (
-  <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-    <path d="M12 21c0-4.6 1.8-8.2 5.5-10.7 1.9-1.2 3.2-3.4 3.5-6.3-3.1.2-5.7 1.2-7.7 3.1A8.2 8.2 0 0 0 12 9.4a8.2 8.2 0 0 0-1.3-2.3C8.7 5.2 6.1 4.2 3 4c.3 2.9 1.6 5.1 3.5 6.3C10.2 12.8 12 16.4 12 21Z" />
-    <path d="M12 10v11" />
-  </svg>
-);
-
-const IconHelp = () => (
-  <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-    <circle cx="12" cy="12" r="9" />
-    <path d="M9.4 9.2a2.8 2.8 0 1 1 4.9 1.8c-.7.8-1.4 1.2-1.8 1.8-.2.3-.3.7-.3 1.2" />
-    <circle cx="12" cy="17" r="1" fill="currentColor" stroke="none" />
-  </svg>
-);
-
 const IconSettings = () => (
   <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
     <path d="M12 15.5A3.5 3.5 0 1 0 12 8.5a3.5 3.5 0 0 0 0 7Z" />
@@ -72,26 +54,14 @@ interface BottomSheetProps {
   pendingEntriesCount: number;
   formState: FormState;
   onFormStateChange: React.Dispatch<React.SetStateAction<FormState>>;
-  plantTypes: string[];
-  onRegisterPlantType: (value: string) => void;
   onClearData: () => void;
   appsScriptUrl: string;
   onAppsScriptUrlChange: (url: string) => void;
-  syncMode: SyncMode;
-  onSyncModeChange: React.Dispatch<React.SetStateAction<SyncMode>>;
-  storageStatus: BrowserStorageStatus | null;
-  tabRequest: BottomSheetTabRequest | null;
-  hcvInsightSelection: HcvInsightSelection | null;
-  onSelectHealthInsight: (result: PlantHealthResult) => void;
   showToast: (message: string, type?: 'success' | 'error' | 'info') => void;
   gps: GpsLocation | null;
   onGpsUpdate: (gps: GpsLocation) => void;
-  onSyncPending: (options?: { background?: boolean; force?: boolean }) => Promise<void>;
+  onSyncPending: () => Promise<void>;
   isOnline: boolean;
-  onBackupNow: () => void;
-  isBackupRunning: boolean;
-  autoBackupIntervalMinutes: AutoBackupIntervalMinutes;
-  onAutoBackupIntervalChange: React.Dispatch<React.SetStateAction<AutoBackupIntervalMinutes>>;
 }
 
 const TabLoader = () => (
@@ -102,40 +72,9 @@ const TabLoader = () => (
 );
 
 export const BottomSheet: React.FC<BottomSheetProps> = ({
-  isOpen,
-  onClose,
-  entries,
-  totalEntriesCount,
-  pendingEntriesCount,
-  formState,
-  onFormStateChange,
-  plantTypes,
-  onRegisterPlantType,
-  onClearData,
-  appsScriptUrl,
-  onAppsScriptUrlChange,
-  syncMode,
-  onSyncModeChange,
-  storageStatus,
-  tabRequest,
-  hcvInsightSelection,
-  onSelectHealthInsight,
-  onSyncPending,
-  isOnline,
-  onBackupNow,
-  isBackupRunning,
-  autoBackupIntervalMinutes,
-  onAutoBackupIntervalChange,
+  isOpen, onClose, entries, totalEntriesCount, pendingEntriesCount, formState, onFormStateChange, onClearData, appsScriptUrl, onAppsScriptUrlChange, onSyncPending, isOnline
 }) => {
   const [activeTab, setActiveTab] = useState('form');
-
-  useEffect(() => {
-    if (!tabRequest) {
-      return;
-    }
-
-    setActiveTab(tabRequest.tabId);
-  }, [tabRequest]);
 
   return (
     <div 
@@ -159,8 +98,6 @@ export const BottomSheet: React.FC<BottomSheetProps> = ({
               { id: 'form', label: 'Input', icon: <IconInput /> },
               { id: 'grafik', label: 'Analitik', icon: <IconAnalytics /> },
               { id: 'data', label: 'Histori', icon: <IconHistory /> },
-              { id: 'hcv', label: 'HCV', icon: <IconLeaf /> },
-              { id: 'help', label: 'Bantuan', icon: <IconHelp /> },
               { id: 'dashboard', label: 'Cloud', icon: <IconCloud /> },
               { id: 'pengaturan', label: 'Setelan', icon: <IconSettings /> }
             ].map((tab) => (
@@ -180,42 +117,11 @@ export const BottomSheet: React.FC<BottomSheetProps> = ({
 
         <div className="flex-1 overflow-y-auto px-6 pb-10 space-y-6">
           <Suspense fallback={<TabLoader />}>
-            {activeTab === 'form' && (
-              <FormTab
-                formState={formState}
-                onFormStateChange={onFormStateChange}
-                plantTypes={plantTypes}
-                onRegisterPlantType={onRegisterPlantType}
-              />
-            )}
-            {activeTab === 'grafik' && (
-              <AnalyticsTab
-                entries={entries}
-                appsScriptUrl={appsScriptUrl}
-                isOnline={isOnline}
-                onSelectHealthInsight={onSelectHealthInsight}
-                onBackupNow={onBackupNow}
-                isBackupRunning={isBackupRunning}
-              />
-            )}
+            {activeTab === 'form' && <FormTab formState={formState} onFormStateChange={onFormStateChange} />}
+            {activeTab === 'grafik' && <AnalyticsTab entries={entries} appsScriptUrl={appsScriptUrl} isOnline={isOnline} />}
             {activeTab === 'data' && <DataTab entries={entries} totalEntriesCount={totalEntriesCount} pendingCount={pendingEntriesCount} isOnline={isOnline} onSyncPending={onSyncPending} />}
-            {activeTab === 'hcv' && <HcvTab entries={entries} totalEntriesCount={totalEntriesCount} selectedInsight={hcvInsightSelection} />}
-            {activeTab === 'help' && <HelpTab />}
             {activeTab === 'dashboard' && <OnlineDashboardTab appsScriptUrl={appsScriptUrl} isOnline={isOnline} />}
-            {activeTab === 'pengaturan' && (
-              <SettingsTab
-                appsScriptUrl={appsScriptUrl}
-                onAppsScriptUrlChange={onAppsScriptUrlChange}
-                syncMode={syncMode}
-                onSyncModeChange={onSyncModeChange}
-                storageStatus={storageStatus}
-                onClearData={onClearData}
-                autoBackupIntervalMinutes={autoBackupIntervalMinutes}
-                onAutoBackupIntervalChange={onAutoBackupIntervalChange}
-                onSpreadsheetBackupNow={onBackupNow}
-                isSpreadsheetBackupRunning={isBackupRunning}
-              />
-            )}
+            {activeTab === 'pengaturan' && <SettingsTab appsScriptUrl={appsScriptUrl} onAppsScriptUrlChange={onAppsScriptUrlChange} onClearData={onClearData} />}
           </Suspense>
         </div>
       </div>

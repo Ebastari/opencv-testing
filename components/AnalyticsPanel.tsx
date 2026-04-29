@@ -265,22 +265,10 @@ const MapAutoFit = ({ points }: { points: [number, number][] }) => {
   return null;
 };
 
-const TypedMapContainer = MapContainer as unknown as React.ComponentType<React.PropsWithChildren<{
-  center: [number, number];
-  zoom: number;
-  scrollWheelZoom: boolean;
-  style: React.CSSProperties;
-}>>;
-
-const TypedPopup = Popup as unknown as React.ComponentType<React.PropsWithChildren<{
-  minWidth?: number;
-}>>;
-
-export const AnalyticsPanel: React.FC<{ entries: PlantEntry[]; appsScriptUrl?: string; useCloudSummary?: boolean; onSelectHealthInsight?: (result: PlantHealthResult) => void }> = ({
+export const AnalyticsPanel: React.FC<{ entries: PlantEntry[]; appsScriptUrl?: string; useCloudSummary?: boolean }> = ({
   entries,
   appsScriptUrl = '',
   useCloudSummary = true,
-  onSelectHealthInsight,
 }) => {
   const [isLeafletReady, setIsLeafletReady] = useState(false);
   const [isImageAnalysisRunning, setIsImageAnalysisRunning] = useState(false);
@@ -761,16 +749,7 @@ export const AnalyticsPanel: React.FC<{ entries: PlantEntry[]; appsScriptUrl?: s
           </div>
         </div>
 
-        <button
-          type="button"
-          onClick={() => {
-            if (ecologySummary.hsvLatest && onSelectHealthInsight) {
-              onSelectHealthInsight(ecologySummary.hsvLatest);
-            }
-          }}
-          disabled={!ecologySummary.hsvLatest || !onSelectHealthInsight}
-          className="w-full text-left bg-slate-50 border border-slate-100 rounded-2xl p-4 transition-all enabled:hover:border-emerald-200 enabled:hover:bg-emerald-50/60 disabled:cursor-default"
-        >
+        <div className="bg-slate-50 border border-slate-100 rounded-2xl p-4">
           <p className="text-[9px] font-black text-slate-400 uppercase mb-1">HSV Plant Health (Citra Terbaru)</p>
           {ecologySummary.hsvLatest ? (
             <div className="text-[10px] font-bold text-slate-700 space-y-1">
@@ -781,18 +760,13 @@ export const AnalyticsPanel: React.FC<{ entries: PlantEntry[]; appsScriptUrl?: s
                 HSV: H {ecologySummary.hsvLatest.hue} • S {ecologySummary.hsvLatest.saturation} • V{' '}
                 {ecologySummary.hsvLatest.value}
               </p>
-              {onSelectHealthInsight && (
-                <p className="text-[9px] uppercase tracking-widest text-emerald-700">
-                  Klik untuk buka penjelasan ilmiah di panel HCV
-                </p>
-              )}
             </div>
           ) : (
             <p className="text-[10px] font-bold text-slate-500">
               Belum ada citra yang bisa dianalisis (cek izin CORS untuk gambar cloud).
             </p>
           )}
-        </button>
+        </div>
       </section>
 
       <section className="space-y-4">
@@ -806,7 +780,7 @@ export const AnalyticsPanel: React.FC<{ entries: PlantEntry[]; appsScriptUrl?: s
           </span>
         </div>
         <div className="h-[350px] w-full rounded-[2.5rem] overflow-hidden border border-slate-100 shadow-xl relative z-0">
-          <TypedMapContainer
+          <MapContainer
             center={mapCenter as [number, number]}
             zoom={16}
             scrollWheelZoom={false}
@@ -825,7 +799,7 @@ export const AnalyticsPanel: React.FC<{ entries: PlantEntry[]; appsScriptUrl?: s
                     },
                   }}
                 >
-                  <TypedPopup minWidth={220}>
+                  <Popup minWidth={220}>
                     <div className="w-full overflow-hidden">
                       {(popupImageById[entry.id] || entry.thumbnail || entry.foto) && (
                         <img
@@ -844,10 +818,10 @@ export const AnalyticsPanel: React.FC<{ entries: PlantEntry[]; appsScriptUrl?: s
                         {entry.tanaman} • {entry.tinggi} CM
                       </p>
                     </div>
-                  </TypedPopup>
+                  </Popup>
                 </Marker>
               ))}
-          </TypedMapContainer>
+          </MapContainer>
         </div>
       </section>
 

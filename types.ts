@@ -5,61 +5,6 @@ export interface GpsLocation {
   accuracy: number;
 }
 
-export type ViewMode = 'camera' | 'gis';
-
-export type SyncMode = 'fast' | 'lite' | 'hyperlink';
-export type PlantHealthLabel = 'Sehat' | 'Merana' | 'Mati';
-export type BottomSheetTabId = 'form' | 'grafik' | 'data' | 'hcv' | 'help' | 'dashboard' | 'pengaturan';
-
-export type AutoBackupIntervalMinutes = 0 | 15 | 30 | 60;
-
-export interface BottomSheetTabRequest {
-  tabId: BottomSheetTabId;
-  requestKey: string;
-}
-
-export interface HcvInsightSelection {
-  source: 'camera-ai' | 'analytics-ai';
-  health: PlantHealthLabel;
-  confidence: number;
-  hue?: number;
-  saturation?: number;
-  value?: number;
-}
-
-export interface BrowserStorageStatus {
-  usageBytes: number;
-  quotaBytes: number;
-  remainingBytes: number;
-  usageRatio: number;
-  level: 'normal' | 'warning' | 'critical' | 'unsupported';
-}
-
-export const DEFAULT_PLANT_TYPES = ['Sengon', 'Nangka', 'Mahoni', 'Malapari'] as const;
-
-// Cloud/GAS Types
-export type Tree = PlantEntry;
-
-export interface EcologyMetrics {
-  treeId: string;
-  density_ha: number;
-  cci: number;
-  total_biomass_kg: number;
-  ndvi?: number;
-  health_score?: number;
-  analysis_timestamp: string;
-}
-
-export interface CloudTree extends Tree {
-  cloudId?: string;
-  syncedAt?: string;
-}
-
-export interface CloudEcologyMetrics extends EcologyMetrics {
-  source: 'cloud';
-  analysisDate: string;
-}
-
 // ============================================
 // GRID SYSTEM TYPES
 // ============================================
@@ -110,7 +55,7 @@ export interface PlantEntry {
   pengawas: string;
   vendor: string;
   tim: string;
-  kesehatan: PlantHealthLabel;
+  kesehatan: 'Sehat' | 'Merana' | 'Mati';
   gpsQualityAtCapture?: 'Tinggi' | 'Sedang' | 'Rendah' | 'Tidak Tersedia';
   gpsAccuracyAtCapture?: number;
   rawKoordinat?: string;
@@ -129,11 +74,10 @@ export interface PlantEntry {
   linkDrive?: string;
   statusDuplikat?: string;
   statusVerifikasi?: string;
-  aiKesehatan?: PlantHealthLabel;
+  aiKesehatan?: 'Sehat' | 'Merana' | 'Mati';
   aiConfidence?: number;
   aiDeskripsi?: string;
   hcvInput?: number;
-  hcvDescription?: string;
 }
 
 export interface FormState {
@@ -144,16 +88,9 @@ export interface FormState {
   pengawas: string;
   vendor: string;
   tim: string;
-  kesehatan: PlantHealthLabel;
+  kesehatan: 'Sehat' | 'Merana' | 'Mati';
   spacingX: number;
   spacingY: number;
-}
-
-export interface MapViewProps {
-  entries: PlantEntry[];
-  onBack: () => void;
-  pendingCount: number;
-  totalEntriesCount: number;
 }
 
 export interface ToastState {

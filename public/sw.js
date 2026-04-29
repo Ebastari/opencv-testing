@@ -1,6 +1,6 @@
-const APP_SHELL_CACHE = 'montana-app-shell-v4';
-const RUNTIME_CACHE = 'montana-runtime-v3';
-const API_CACHE = 'montana-api-v2';
+const APP_SHELL_CACHE = 'montana-app-shell-v3';
+const RUNTIME_CACHE = 'montana-runtime-v2';
+const API_CACHE = 'montana-api-v1';
 const OFFLINE_URL = '/offline.html';
 
 const APP_SHELL_ASSETS = [

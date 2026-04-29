@@ -11,10 +11,11 @@
     ],
     "skipLibCheck": true,
     "types": [
-      "node",
-      "react",
-      "react-dom",
-      "vite/client"
+      "node"
+    ],
+    "typeRoots": [
+      "./node_modules/@types",
+      "./types"
     ],
     "moduleResolution": "bundler",
     "isolatedModules": true,

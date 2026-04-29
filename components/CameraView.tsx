@@ -1,7 +1,7 @@
 import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react';
 // ...existing code...
 import { getCameraDevices, startCamera } from '../services/cameraService';
-import { GpsLocation, FormState, DEFAULT_PLANT_TYPES, type SyncMode, type ViewMode } from '../types';
+import { GpsLocation, FormState } from '../types';
 import { Compass } from './Compass';
 import { LiveHealthComment } from './LiveHealthComment';
 import { analyzePlantHealthHSV, type PlantHealthResult } from '../ecology/plantHealth';
@@ -22,7 +22,6 @@ import HeightAiDetection from './height/HeightAiDetection';
 import HeightSliderControl from './height/HeightSliderControl';
 import HeightPixelScale from './height/HeightPixelScale';
 import HeightSettingsCard, { type HeightMode } from './height/HeightSettingsCard';
-import { IconGIS } from './IconGIS';
 
 const HEIGHT_MODE_KEY = 'camera-montana-height-mode-v1';
 
@@ -34,14 +33,6 @@ interface HeightAiEstimate {
 interface HeightAiRange {
   min: number;
   max: number;
-}
-
-type HeightAiBehavior = 'suggestion' | 'automatic';
-
-interface HeightAiSuggestion {
-  cm: number;
-  source: 'visual' | 'history';
-  confidence: number;
 }
 
 // New: Height Measurement Mode Types
@@ -56,7 +47,6 @@ const HEIGHT_MAX_CM = 500;
 const HEIGHT_AI_NOTICE_DISMISSED_KEY = 'camera-montana-height-ai-notice-dismissed-v1';
 const HEIGHT_AI_CALIBRATION_SAMPLES_KEY = 'camera-montana-height-ai-calibration-samples-v1';
 const HEIGHT_AI_RANGE_KEY = 'camera-montana-height-ai-range-v1';
-const HEIGHT_AI_BEHAVIOR_KEY = 'camera-montana-height-ai-behavior-v1';
 
 const clamp = (value: number, min: number, max: number): number => Math.min(max, Math.max(min, value));
 
@@ -110,62 +100,6 @@ const deriveRangeFromSamples = (samples: number[]): HeightAiRange | null => {
   return { min, max };
 };
 
-const deriveSuggestedHeight = (samples: number[], range: HeightAiRange | null): number | null => {
-  const cleaned = samples
-    .map((v) => Number(v))
-    .filter((v) => Number.isFinite(v) && v >= HEIGHT_MIN_CM && v <= HEIGHT_MAX_CM);
-
-  if (cleaned.length === 0 && !range) {
-    return null;
-  }
-
-  const derivedRange =
-    range ??
-    (cleaned.length > 0
-      ? {
-          min: clamp(round(Math.min(...cleaned)), HEIGHT_MIN_CM, HEIGHT_MAX_CM),
-          max: clamp(round(Math.max(...cleaned)), HEIGHT_MIN_CM, HEIGHT_MAX_CM),
-        }
-      : null);
-
-  if (!derivedRange) {
-    return null;
-  }
-
-  const average =
-    cleaned.length > 0
-      ? cleaned.reduce((sum, value) => sum + value, 0) / cleaned.length
-      : (derivedRange.min + derivedRange.max) / 2;
-
-  return clamp(round(average), derivedRange.min, derivedRange.max);
-};
-
-const mapViewportPointToVideoPoint = (
-  clientX: number,
-  clientY: number,
-  rect: DOMRect,
-  canvasWidth: number,
-  canvasHeight: number,
-): MeasurePoint => {
-  if (rect.width <= 0 || rect.height <= 0 || canvasWidth <= 0 || canvasHeight <= 0) {
-    return { x: 0, y: 0 };
-  }
-
-  const coverScale = Math.max(rect.width / canvasWidth, rect.height / canvasHeight);
-  const renderedWidth = canvasWidth * coverScale;
-  const renderedHeight = canvasHeight * coverScale;
-  const offsetX = (renderedWidth - rect.width) / 2;
-  const offsetY = (renderedHeight - rect.height) / 2;
-
-  const x = ((clientX - rect.left) + offsetX) / coverScale;
-  const y = ((clientY - rect.top) + offsetY) / coverScale;
-
-  return {
-    x: clamp(x, 0, canvasWidth),
-    y: clamp(y, 0, canvasHeight),
-  };
-};
-
 const toHSV = (r: number, g: number, b: number): { h: number; s: number; v: number } => {
   const nr = r / 255;
   const ng = g / 255;
@@ -193,7 +127,6 @@ interface CameraViewProps {
   onCapture: (dataUrl: string, aiHealth?: PlantHealthResult | null, thumbnailDataUrl?: string, mode?: 'manual' | 'ai') => void;
   formState: FormState;
   onFormStateChange: React.Dispatch<React.SetStateAction<FormState>>;
-  plantTypes: string[];
   entriesCount: number;
   pendingCount: number;
   isSyncing: boolean;
@@ -201,20 +134,16 @@ interface CameraViewProps {
   gps: GpsLocation | null;
   onGpsUpdate: (gps: GpsLocation) => void;
   onShowSheet: () => void;
-  onHealthBadgeClick: (result: PlantHealthResult) => void;
   showToast: (message: string, type?: 'success' | 'error' | 'info') => void;
   isOnline: boolean;
-  syncMode: SyncMode;
-  onSyncModeChange: React.Dispatch<React.SetStateAction<SyncMode>>;
   gridAnchor: { lat: number; lon: number; setAt: string } | null;
   distanceFromAnchorM: number | null;
   effectiveCoordinate: { lat: number; lon: number; snapped: boolean; stepX: number; stepY: number } | null;
   onSetGridAnchor: () => void;
   onClearGridAnchor: () => void;
-  onBackupNow: () => void;
-  isBackupRunning: boolean;
-  onToggleViewMode?: (mode: ViewMode) => void;
 }
+
+const PLANT_TYPES = ['Sengon', 'Nangka', 'Mahoni', 'Malapari'];
 const DAILY_TARGET = 50;
 const BRAND_NAME = "PT ENERGI BATUBARA LESTARI";
 const MAX_THUMBNAIL_SIZE = 320;
@@ -249,14 +178,6 @@ const IconSwitchCamera = () => (
   </svg>
 );
 
-const IconBackup = () => (
-  <svg viewBox="0 0 24 24" className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-    <path d="M12 3v10" />
-    <path d="m8.5 9.5 3.5 3.5 3.5-3.5" />
-    <path d="M4 15.5V18a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2.5" />
-  </svg>
-);
-
 const IconWarning = () => (
   <svg viewBox="0 0 24 24" className="w-9 h-9" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
     <path d="M12 3 2.5 20h19L12 3Z" />
@@ -277,7 +198,6 @@ export const CameraView: React.FC<CameraViewProps> = ({
   onCapture,
   formState,
   onFormStateChange,
-  plantTypes,
   entriesCount,
   pendingCount,
   isSyncing,
@@ -285,21 +205,14 @@ export const CameraView: React.FC<CameraViewProps> = ({
   gps,
   onGpsUpdate,
   onShowSheet,
-  onHealthBadgeClick,
   showToast,
   isOnline,
-  syncMode,
-  onSyncModeChange,
   gridAnchor,
   distanceFromAnchorM,
   effectiveCoordinate,
   onSetGridAnchor,
   onClearGridAnchor,
-  onBackupNow,
-  isBackupRunning,
-  onToggleViewMode,
 }) => {
-  const availablePlantTypes = plantTypes.length > 0 ? plantTypes : [...DEFAULT_PLANT_TYPES];
   // Semua deklarasi state harus di sini, sebelum useEffect
   const [showGridOverlay, setShowGridOverlay] = useState(false);
   // Height mode state - reads from settings
@@ -312,15 +225,6 @@ export const CameraView: React.FC<CameraViewProps> = ({
     } catch {}
     return 'slider'; // Default to slider mode
   });
-  const [heightAiBehavior, setHeightAiBehavior] = useState<HeightAiBehavior>(() => {
-    try {
-      const saved = window.localStorage.getItem(HEIGHT_AI_BEHAVIOR_KEY);
-      if (saved === 'suggestion' || saved === 'automatic') {
-        return saved as HeightAiBehavior;
-      }
-    } catch {}
-    return 'suggestion';
-  });
 
   // Listen for height mode changes from settings (when user changes in SettingsTab while app is running)
   // Note: storage event only fires for OTHER tabs, so we also check on focus
@@ -330,10 +234,6 @@ export const CameraView: React.FC<CameraViewProps> = ({
         const saved = window.localStorage.getItem(HEIGHT_MODE_KEY);
         if (saved === 'ai' || saved === 'slider' || saved === 'pixel-scale') {
           setHeightMode(saved as HeightMode);
-        }
-        const savedBehavior = window.localStorage.getItem(HEIGHT_AI_BEHAVIOR_KEY);
-        if (savedBehavior === 'suggestion' || savedBehavior === 'automatic') {
-          setHeightAiBehavior(savedBehavior as HeightAiBehavior);
         }
       } catch {}
     };
@@ -347,11 +247,6 @@ export const CameraView: React.FC<CameraViewProps> = ({
       if (e.key === HEIGHT_MODE_KEY && e.newValue) {
         if (e.newValue === 'ai' || e.newValue === 'slider' || e.newValue === 'pixel-scale') {
           setHeightMode(e.newValue as HeightMode);
-        }
-      }
-      if (e.key === HEIGHT_AI_BEHAVIOR_KEY && e.newValue) {
-        if (e.newValue === 'suggestion' || e.newValue === 'automatic') {
-          setHeightAiBehavior(e.newValue as HeightAiBehavior);
         }
       }
       // Listen for pixel scale settings changes
@@ -382,18 +277,6 @@ export const CameraView: React.FC<CameraViewProps> = ({
     };
   }, []);
 
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(HEIGHT_MODE_KEY, heightMode);
-    } catch {}
-  }, [heightMode]);
-
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(HEIGHT_AI_BEHAVIOR_KEY, heightAiBehavior);
-    } catch {}
-  }, [heightAiBehavior]);
-
   // Derive isHeightAiMode and isMeasureMode from heightMode
   // Always read from localStorage to ensure sync with settings
   const getCurrentMode = useCallback((): HeightMode => {
@@ -408,7 +291,6 @@ export const CameraView: React.FC<CameraViewProps> = ({
   
   const isHeightAiMode = getCurrentMode() === 'ai';
   const isMeasureMode = getCurrentMode() === 'pixel-scale';
-  const isSliderHeightMode = getCurrentMode() === 'slider';
   
   // Show/hide measurement overlay (for pixel scale mode) - default to shown for better UX
   // Sync with localStorage for persistence
@@ -430,6 +312,8 @@ export const CameraView: React.FC<CameraViewProps> = ({
   
   // Height controls collapsed state
   const [heightControlsCollapsed, setHeightControlsCollapsed] = useState(false);
+  // Mode pengambilan titik manual aktif jika mode AI nonaktif
+  const isManualHeightMode = !isHeightAiMode;
   const [sampleIndicator, setSampleIndicator] = useState<number | null>(null);
   const [calibrationActive, setCalibrationActive] = useState(false);
   const [showCalibrationHint, setShowCalibrationHint] = useState(false);
@@ -438,10 +322,7 @@ export const CameraView: React.FC<CameraViewProps> = ({
   const [cameraLoading, setCameraLoading] = useState(true);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [needsUserAction, setNeedsUserAction] = useState(false);
-  const cameraInitStartRef = useRef<number>(Date.now());
   const [showGridPanel, setShowGridPanel] = useState(false);
-  const [showPlantTypePicker, setShowPlantTypePicker] = useState(false);
-  const [isCompassMode, setIsCompassMode] = useState(false);
   const [livePlantHealth, setLivePlantHealth] = useState<PlantHealthResult | null>(null);
   const [showHeightAiNotice, setShowHeightAiNotice] = useState(false);
   const [showHeightAiPopup, setShowHeightAiPopup] = useState(false);
@@ -480,30 +361,6 @@ export const CameraView: React.FC<CameraViewProps> = ({
   // NEW: AI Detection Error States
   const [opencvLoadError, setOpencvLoadError] = useState(false);
   const [detectionFailureReason, setDetectionFailureReason] = useState<'opencv' | 'noplan' | 'lowlight' | 'network' | 'unknown' | null>(null);
-  const activeHeightSuggestion = useMemo<HeightAiSuggestion | null>(() => {
-    if (!isHeightAiMode) {
-      return null;
-    }
-
-    if (heightAiEstimate && heightAiEstimate.cm > 0) {
-      return {
-        cm: heightAiEstimate.cm,
-        source: 'visual',
-        confidence: heightAiEstimate.confidence,
-      };
-    }
-
-    const fallbackCm = deriveSuggestedHeight(heightAiSamples, heightAiRange);
-    if (!fallbackCm) {
-      return null;
-    }
-
-    return {
-      cm: fallbackCm,
-      source: 'history',
-      confidence: 0,
-    };
-  }, [heightAiEstimate, heightAiRange, heightAiSamples, isHeightAiMode]);
 
   // Update localStorage when toggle changes
   useEffect(() => {
@@ -511,27 +368,6 @@ export const CameraView: React.FC<CameraViewProps> = ({
       localStorage.setItem('camera-height-debug', showHeightDebug.toString());
     } catch {}
   }, [showHeightDebug]);
-
-  useEffect(() => {
-    if (isHeightAiMode) {
-      return;
-    }
-
-    setHeightAiEstimate(null);
-    setDetectionFailureReason(null);
-    setOpencvLoadError(false);
-    heightAiBufferRef.current = [];
-  }, [isHeightAiMode]);
-
-  const applySuggestedHeight = useCallback((cm: number, source: 'visual' | 'history') => {
-    onFormStateChange((prev) => ({ ...prev, tinggi: cm }));
-    showToast(
-      source === 'visual'
-        ? `Saran AI visual ${cm} cm diterapkan.`
-        : `Saran otomatis ${cm} cm diterapkan.`,
-      'success',
-    );
-  }, [onFormStateChange, showToast]);
 
   // NEW: Manual Height Measurement Mode
   // Note: isMeasureMode is now derived from heightMode (see above)
@@ -545,22 +381,9 @@ export const CameraView: React.FC<CameraViewProps> = ({
   const [hasSeenGuide, setHasSeenGuide] = useState(false); // Track if user has seen guide
   const [showCaptureAnalysis, setShowCaptureAnalysis] = useState(false); // Show analysis only on capture
   const [draggingLine, setDraggingLine] = useState<number | null>(null);
-
-  const panelHeightDisplay = useMemo(() => {
-    if (isHeightAiMode && activeHeightSuggestion) {
-      return activeHeightSuggestion.cm;
-    }
-
-    if (isMeasureMode && measuredHeightCm !== null) {
-      return Math.round(measuredHeightCm);
-    }
-
-    return formState.tinggi;
-  }, [activeHeightSuggestion, formState.tinggi, isHeightAiMode, isMeasureMode, measuredHeightCm]);
   
   // Canvas ref for measurement overlay
   const measureCanvasRef = useRef<HTMLCanvasElement>(null);
-  const previousCompassModeRef = useRef(false);
 
   // Sync stick height and line offset from HeightPixelScale settings
   useEffect(() => {
@@ -635,8 +458,14 @@ export const CameraView: React.FC<CameraViewProps> = ({
     const canvas = measureCanvasRef.current;
     if (!canvas) return;
     
+    // Get click position relative to the canvas/video
     const rect = canvas.getBoundingClientRect();
-    const { x, y } = mapViewportPointToVideoPoint(e.clientX, e.clientY, rect, canvas.width, canvas.height);
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    
+    // Calculate position - works anywhere on screen
+    const x = (e.clientX - rect.left) * scaleX;
+    const y = (e.clientY - rect.top) * scaleY;
     
     // Check if clicking on existing marker to drag it
     const clickedPointIndex = measurePoints.findIndex(p => {
@@ -690,7 +519,11 @@ export const CameraView: React.FC<CameraViewProps> = ({
     if (!canvas) return;
     
     const rect = canvas.getBoundingClientRect();
-    const { x, y } = mapViewportPointToVideoPoint(e.clientX, e.clientY, rect, canvas.width, canvas.height);
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    
+    const x = (e.clientX - rect.left) * scaleX;
+    const y = (e.clientY - rect.top) * scaleY;
     
     // Update the dragged point position
     const newPoints = [...measurePoints];
@@ -698,31 +531,6 @@ export const CameraView: React.FC<CameraViewProps> = ({
     setMeasurePoints(newPoints);
     
     // Recalculate height if we have 2 points
-    if (newPoints.length === 2) {
-      const heightCm = calculateMeasureHeight(newPoints, canvas.height);
-      if (heightCm) {
-        setMeasuredHeightCm(heightCm);
-        onFormStateChange(prev => ({ ...prev, tinggi: Math.round(heightCm) }));
-      }
-    }
-  }, [draggingPoint, isMeasureMode, measurePoints, calculateMeasureHeight, onFormStateChange]);
-
-  const handleMeasureTouchMove = useCallback((e: React.TouchEvent<HTMLElement>) => {
-    if (draggingPoint === null || !isMeasureMode) return;
-
-    const canvas = measureCanvasRef.current;
-    if (!canvas) return;
-
-    const touch = e.touches[0];
-    if (!touch) return;
-
-    const rect = canvas.getBoundingClientRect();
-    const { x, y } = mapViewportPointToVideoPoint(touch.clientX, touch.clientY, rect, canvas.width, canvas.height);
-
-    const newPoints = [...measurePoints];
-    newPoints[draggingPoint] = { x, y };
-    setMeasurePoints(newPoints);
-
     if (newPoints.length === 2) {
       const heightCm = calculateMeasureHeight(newPoints, canvas.height);
       if (heightCm) {
@@ -764,13 +572,13 @@ export const CameraView: React.FC<CameraViewProps> = ({
     // Clear canvas
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     
-    // Draw grid lines (reference for stick) - using linePositionPercent as center.
-    // Marker pangkal/ujung pohon tetap digambar walau garis bantu dimatikan.
+    // Draw grid lines (reference for stick) - using linePositionPercent as center
     const lineOffset = lineOffsetPercent / 100;
     const lineCenter = linePositionPercent / 100;
     const y1 = canvas.height * (lineCenter - lineOffset);
     const y2 = canvas.height * (lineCenter + lineOffset);
-
+    
+    // Draw reference lines with labels
     ctx.strokeStyle = '#FF3860';
     ctx.lineWidth = 4;
     ctx.beginPath();
@@ -779,21 +587,28 @@ export const CameraView: React.FC<CameraViewProps> = ({
     ctx.moveTo(0, y2);
     ctx.lineTo(canvas.width, y2);
     ctx.stroke();
-
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
-    ctx.strokeStyle = '#FF3860';
-    ctx.lineWidth = 2;
-
-    ctx.beginPath();
-    ctx.arc(canvas.width - 50, y1, 12, 0, 2 * Math.PI);
-    ctx.fill();
-    ctx.stroke();
-
-    ctx.beginPath();
-    ctx.arc(canvas.width - 50, y2, 12, 0, 2 * Math.PI);
-    ctx.fill();
-    ctx.stroke();
-
+    
+    // Draw drag handles on lines (visible when measuring)
+    if (isMeasureMode) {
+      // Draw drag handle circles on lines
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+      ctx.strokeStyle = '#FF3860';
+      ctx.lineWidth = 2;
+      
+      // Top line handle
+      ctx.beginPath();
+      ctx.arc(canvas.width - 50, y1, 12, 0, 2 * Math.PI);
+      ctx.fill();
+      ctx.stroke();
+      
+      // Bottom line handle
+      ctx.beginPath();
+      ctx.arc(canvas.width - 50, y2, 12, 0, 2 * Math.PI);
+      ctx.fill();
+      ctx.stroke();
+    }
+    
+    // Draw stick height label in center of lines
     ctx.fillStyle = 'white';
     ctx.font = 'bold 24px sans-serif';
     ctx.textAlign = 'right';
@@ -838,7 +653,7 @@ export const CameraView: React.FC<CameraViewProps> = ({
       ctx.lineWidth = 3;
       ctx.stroke();
     }
-  }, [isMeasureMode, measurePoints, lineOffsetPercent, linePositionPercent, stickHeightMeters]);
+  }, [isMeasureMode, measurePoints, lineOffsetPercent, stickHeightMeters]);
 
 // AI Height Debug Visualization Overlay (Fixed: removed duplicate)
   useEffect(() => {
@@ -963,6 +778,7 @@ export const CameraView: React.FC<CameraViewProps> = ({
     }
   });
   const hasShownHeightAiNoticeRef = useRef(false);
+  const hasAutoEnabledHeightAiRef = useRef(false);
   const heightAiNoticeTimerRef = useRef<number | null>(null);
   const heightAiBufferRef = useRef<number[]>([]);
   const lastHeightSyncRef = useRef(0);
@@ -991,7 +807,6 @@ export const CameraView: React.FC<CameraViewProps> = ({
   }, []);
 
   const initializeCamera = useCallback(async (deviceId?: string) => {
-    cameraInitStartRef.current = Date.now();
     setCameraLoading(true);
     setCameraError(null);
     setNeedsUserAction(false);
@@ -1053,10 +868,6 @@ export const CameraView: React.FC<CameraViewProps> = ({
           });
         }
       }
-      if (!videoRef.current) {
-        setCameraError('Elemen video belum siap. Coba lagi.');
-        setCameraLoading(false);
-      }
     } catch (err: any) {
       console.error("Camera init error:", err);
       setCameraError(err.name === 'NotAllowedError' ? 'Izin kamera ditolak' : 'Gagal memuat kamera');
@@ -1068,10 +879,6 @@ export const CameraView: React.FC<CameraViewProps> = ({
   // Handle visibility change - restart camera if tab becomes visible again
   useEffect(() => {
     const handleVisibilityChange = () => {
-      if (isCompassMode) {
-        return;
-      }
-
       if (document.visibilityState === 'visible') {
         // Reinitialize camera when tab becomes visible
         const startup = async () => {
@@ -1099,7 +906,7 @@ export const CameraView: React.FC<CameraViewProps> = ({
     return () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [cameraLoading, stopCurrentStream, initializeCamera, isCompassMode]);
+  }, [cameraLoading, stopCurrentStream, initializeCamera]);
 
   useEffect(() => {
     const startup = async () => {
@@ -1116,41 +923,6 @@ export const CameraView: React.FC<CameraViewProps> = ({
     startup();
     return () => stopCurrentStream();
   }, [initializeCamera, stopCurrentStream]);
-
-  useEffect(() => {
-    if (previousCompassModeRef.current === isCompassMode) {
-      return;
-    }
-
-    previousCompassModeRef.current = isCompassMode;
-
-    if (isCompassMode) {
-      setShowGridPanel(false);
-      setShowPlantTypePicker(false);
-      setCameraLoading(false);
-      setNeedsUserAction(false);
-      stopCurrentStream();
-      return;
-    }
-
-    void initializeCamera(currentDeviceId);
-  }, [isCompassMode, currentDeviceId, initializeCamera, stopCurrentStream]);
-
-  // Watchdog: cegah layar hitam permanen saat kamera stuck di fase loading.
-  useEffect(() => {
-    if (!cameraLoading) return;
-
-    const timer = window.setInterval(() => {
-      const elapsedMs = Date.now() - cameraInitStartRef.current;
-      if (elapsedMs > 10000) {
-        setCameraLoading(false);
-        setNeedsUserAction(true);
-        setCameraError('Kamera tidak merespons. Tekan Aktifkan Kamera.');
-      }
-    }, 1000);
-
-    return () => window.clearInterval(timer);
-  }, [cameraLoading]);
   
   const handleRetryPlay = async () => {
     if (videoRef.current) {
@@ -1398,7 +1170,7 @@ export const CameraView: React.FC<CameraViewProps> = ({
           (async () => {
             try {
               // Pastikan OpenCV.js sudah dimuat - ENHANCED CHECK
-console.log('[AI Height] Analyzing frame, OpenCV ready:', !!((window as any).cv && (window as any).cv.Mat));
+console.log('[AI Height] Analyzing frame, OpenCV ready:', !!(window.cv && window.cv.Mat));
               // Check enhanced state
               const loadState = (window as any).opencvLoadState as OpenCVLoadState || OpenCVLoadState.Idle;
               console.log('[AI Height] OpenCV state:', loadState, 'ready:', isOpenCVReady());
@@ -1465,10 +1237,10 @@ console.log('[AI Height] Analyzing frame, OpenCV ready:', !!((window as any).cv 
                 confidence: cm > 0 ? 90 : 0,
               };
               setHeightAiEstimate(displayEstimate);
-              // Dalam mode otomatis, AI visual boleh langsung mengisi tinggi.
+              // Sinkron ke slider jika beda jauh
               const now = Date.now();
               const delta = Math.abs(formState.tinggi - cm);
-              if (heightAiBehavior === 'automatic' && cm > 0 && delta >= 6 && now - lastHeightSyncRef.current >= 2500) {
+              if (cm > 0 && delta >= 6 && now - lastHeightSyncRef.current >= 2500) {
                 lastHeightSyncRef.current = now;
                 onFormStateChange((prev) => ({ ...prev, tinggi: Math.round(cm) }));
               }
@@ -1501,7 +1273,18 @@ console.error('AI Height detection error:', err);
         analysisCanvasRef.current = null;
       }
     };
-  }, [cameraLoading, cameraError, needsUserAction, currentDeviceId, isHeightAiMode, formState.tinggi, onFormStateChange, heightAiRange, heightAiBehavior]);
+  }, [cameraLoading, cameraError, needsUserAction, currentDeviceId, isHeightAiMode, formState.tinggi, onFormStateChange, heightAiRange]);
+
+  useEffect(() => {
+    if (!livePlantHealth || hasAutoEnabledHeightAiRef.current) {
+      return;
+    }
+
+    // Aktifkan mode Tinggi AI otomatis saat analisis live pertama kali tersedia.
+    hasAutoEnabledHeightAiRef.current = true;
+    setHeightMode('ai');
+    triggerHeightAiNotice();
+  }, [livePlantHealth, triggerHeightAiNotice]);
 
   useEffect(() => {
     return () => {
@@ -1643,7 +1426,97 @@ console.error('AI Height detection error:', err);
 
   return (
     <div className="relative w-screen h-[100dvh] min-h-[100dvh] bg-black overflow-hidden flex items-center justify-center">
-
+      {/* NEW GRID OVERLAY - Enhanced with target points, directional arrows, and capture feedback */}
+      {shouldShowGridOverlay && gridGuidance && (
+        <div className="pointer-events-none absolute inset-0 z-20">
+          <svg width="100%" height="100%" viewBox="0 0 100 100" className="w-full h-full" style={{position:'absolute',top:0,left:0}}>
+            {/* Grid lines - 4x4 grid pattern */}
+            {[1,2,3].map(i => (
+              <line key={`v${i}`} x1={(i*100/4).toFixed(2)} y1="0" x2={(i*100/4).toFixed(2)} y2="100" stroke="white" strokeWidth="0.5" opacity="0.3" />
+            ))}
+            {[1,2,3].map(i => (
+              <line key={`h${i}`} y1={(i*100/4).toFixed(2)} x1="0" y2={(i*100/4).toFixed(2)} x2="100" stroke="white" strokeWidth="0.5" opacity="0.3" />
+            ))}
+            
+            {/* Target point marker - center of view */}
+            <circle cx="50" cy="50" r="3" fill={gridGuidance.isAtTarget ? "#22c55e" : "#3b82f6"} opacity="0.8" />
+            
+            {/* Green feedback ring when at target */}
+            {gridGuidance.isAtTarget && (
+              <circle cx="50" cy="50" r="8" fill="none" stroke="#22c55e" strokeWidth="1" opacity="0.6">
+                <animate attributeName="r" values="6;12;6" dur="1.5s" repeatCount="indefinite" />
+                <animate attributeName="opacity" values="0.8;0.2;0.8" dur="1.5s" repeatCount="indefinite" />
+              </circle>
+            )}
+            
+            {/* Capture lock indicator - red when at target */}
+            {gridGuidance.isAtTarget && (
+              <circle cx="50" cy="50" r="15" fill="none" stroke="#ef4444" strokeWidth="2" opacity="0.9">
+                <animate attributeName="stroke-opacity" values="1;0.3;1" dur="0.8s" repeatCount="indefinite" />
+              </circle>
+            )}
+          </svg>
+          
+          {/* Directional Arrow - Large arrow pointing to target direction */}
+          {gridGuidance.direction !== 'none' && !gridGuidance.isAtTarget && (
+            <div className="absolute inset-0 z-30 flex items-center justify-center pointer-events-none">
+              <div className={`
+                relative flex flex-col items-center justify-center
+                ${gridGuidance.direction === 'north' ? 'mt-[-20%]' : ''}
+                ${gridGuidance.direction === 'south' ? 'mb-[-20%]' : ''}
+                ${gridGuidance.direction === 'east' ? 'mr-[-15%]' : ''}
+                ${gridGuidance.direction === 'west' ? 'ml-[-15%]' : ''}
+              `}>
+                {/* Arrow SVG based on direction */}
+                <svg 
+                  className={`w-20 h-20 ${gridGuidance.direction === 'north' ? 'rotate-0' : ''} ${gridGuidance.direction === 'south' ? 'rotate-180' : ''} ${gridGuidance.direction === 'east' ? 'rotate-90' : ''} ${gridGuidance.direction === 'west' ? 'rotate-[-90deg]' : ''}`}
+                  viewBox="0 0 24 24" 
+                  fill="none"
+                >
+                  <path 
+                    d="M12 4L4 14h5v6l8-10-8-10v6h5L12 4z" 
+                    fill="white" 
+                    stroke="black" 
+                    strokeWidth="1"
+                    opacity="0.9"
+                  />
+                </svg>
+                <span className="absolute -bottom-8 text-white text-xs font-bold bg-black/50 px-2 py-1 rounded">
+                  {getDirectionLabel(gridGuidance.direction)}
+                </span>
+              </div>
+            </div>
+          )}
+          
+          {/* At Target Indicator
+          {gridGuidance.isAtTarget && (
+            <div className="absolute top-1/3 left-1/2 -translate-x-1/2 z-30 pointer-events-none">
+              <div className="flex flex-col items-center">
+                <div className="bg-emerald-500/80 backdrop-blur-sm px-4 py-2 rounded-xl border border-emerald-300/50 animate-pulse">
+                  <span className="text-white text-sm font-bold">
+                    ✓ SESUAI
+                  </span>
+                </div>
+                <span className="text-emerald-200/70 text-[10px] font-medium mt-1">
+                  {formatDistance(gridGuidance.distanceToTarget)} dari target
+                </span>
+              </div>
+            </div>
+          )}
+          
+          {/* Capture Lock Indicator - Red when locked/at target */}
+          {gridGuidance.isAtTarget && (
+            <div className="absolute bottom-1/3 left-1/2 -translate-x-1/2 z-30 pointer-events-none">
+              <div className="flex items-center gap-2 bg-red-500/80 backdrop-blur-sm px-4 py-2 rounded-xl border border-red-300/50">
+                <div className="w-3 h-3 rounded-full bg-white animate-pulse" />
+                <span className="text-white text-sm font-bold">
+                  KUNCI CAPTURE AKTIF
+                </span>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Legacy grid overlay for AI height mode - REMOVED for performance */}
       {/* {showGridOverlay && !gridAnchor && ( */}
@@ -1664,50 +1537,11 @@ console.error('AI Height detection error:', err);
           </div>
         </div>
       )}
-
-      {isCompassMode && (
-        <div className="absolute inset-0 z-[70] bg-slate-950/96 backdrop-blur-xl flex flex-col items-center justify-center px-6">
-          <div className="absolute top-[calc(var(--safe-area-inset-top)+16px)] left-0 right-0 flex items-center justify-between px-4 sm:px-6">
-            <div className="rounded-full bg-white/8 border border-white/10 px-4 py-2">
-              <span className="text-[10px] font-black text-emerald-100 uppercase tracking-[0.24em]">Mode Kompas</span>
-            </div>
-            <button
-              type="button"
-              onClick={() => setIsCompassMode(false)}
-              className="px-4 py-2 rounded-full bg-white text-slate-900 text-[10px] font-black uppercase tracking-[0.16em] shadow-xl active:scale-95"
-            >
-              Sembunyikan Kompas
-            </button>
-          </div>
-
-          <div className="flex flex-col items-center gap-8">
-            <div className="scale-[2.9] sm:scale-[3.5] origin-center">
-              <Compass />
-            </div>
-            <div className="max-w-xs text-center">
-              <p className="text-white text-sm font-black uppercase tracking-[0.2em]">Arah Lapangan Aktif</p>
-              <p className="mt-2 text-white/60 text-[11px] font-bold uppercase tracking-[0.14em]">
-                Kamera dimatikan sementara agar fokus ke pembacaan kompas.
-              </p>
-            </div>
-          </div>
-        </div>
-      )}
-
       <video 
         ref={videoRef} 
         autoPlay 
         playsInline 
         muted 
-        onLoadedData={() => {
-          if (cameraLoading) {
-            setCameraLoading(false);
-          }
-        }}
-        onError={() => {
-          setCameraLoading(false);
-          setCameraError('Video stream gagal dimuat.');
-        }}
         className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-1000 ${cameraLoading ? 'opacity-0' : 'opacity-100'}`} 
       />
       
@@ -1722,14 +1556,17 @@ console.error('AI Height detection error:', err);
             onMouseMove={handleMeasureMouseMove}
             onMouseUp={handleMeasureMouseUp}
             onMouseLeave={handleMeasureMouseUp}
-            onTouchMove={handleMeasureTouchMove}
+            onTouchMove={handleMeasureMouseMove}
             onTouchEnd={handleMeasureMouseUp}
           />
-          <canvas
-            ref={measureCanvasRef}
-            className="absolute inset-0 w-full h-full pointer-events-none z-36"
-            style={{ objectFit: 'cover', opacity: 0.8 }}
-          />
+          {/* Visual overlay lines - can be toggled */}
+          {showMeasureOverlay && (
+            <canvas
+              ref={measureCanvasRef}
+              className="absolute inset-0 w-full h-full pointer-events-none z-36"
+              style={{ objectFit: 'cover', opacity: 0.8 }}
+            />
+          )}
         </>
       )}
       {/* AI Height Debug Overlay */}
@@ -1807,7 +1644,7 @@ console.error('AI Height detection error:', err);
               </p>
             )}
           </div>
-          {(needsUserAction || cameraError) && (
+          {needsUserAction && (
             <button 
               onClick={handleRetryPlay}
               className="px-8 py-4 bg-white text-black font-black text-xs uppercase tracking-widest rounded-full shadow-2xl active:scale-95 transition-transform"
@@ -1836,57 +1673,28 @@ console.error('AI Height detection error:', err);
 
       <div className="absolute top-0 left-0 right-0 px-3 sm:px-5 py-3 sm:py-5 flex justify-between items-start z-30 pointer-events-none safe-top">
         <div className="flex flex-col gap-3 pointer-events-auto">
-          <button
-            type="button"
-            onClick={() => setIsCompassMode(true)}
-            className="active:scale-95 transition-transform"
-            title="Buka mode kompas"
-          >
-            <Compass />
-          </button>
+          <Compass />
           <a 
             href="https://www.montana-tech.info/" 
             target="_blank"
             rel="noopener noreferrer"
             className="w-10 h-10 rounded-full bg-black/15 backdrop-blur-sm border border-white/5 text-white/70 flex items-center justify-center shadow-lg active:scale-90 transition-all hover:bg-black/30"
-            aria-label="Home Montana Tech"
           >
             <IconHome />
           </a>
-          <button
-            type="button"
-            onClick={() => onToggleViewMode?.('gis')}
-            className="w-10 h-10 rounded-full bg-black/15 backdrop-blur-sm border border-white/5 text-white/70 flex items-center justify-center shadow-lg active:scale-90 transition-all hover:bg-black/30"
-            title="Spatial Distribution (GIS)"
-            aria-label="Spatial Distribution (GIS)"
-          >
-            <IconGIS />
-          </button>
         </div>
 
         <div className="flex flex-col items-end gap-2 pointer-events-auto max-w-[220px]">
           <div className="w-full bg-black/15 backdrop-blur-sm px-3 py-2 rounded-2xl border border-white/5 shadow-md">
             <div className="flex items-center justify-between gap-2">
               <span className="text-[8px] font-black text-white/60 uppercase tracking-widest">Panel Kamera</span>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={onBackupNow}
-                  disabled={isBackupRunning}
-                  className="h-6 px-2 rounded-lg bg-cyan-400/15 text-cyan-100 text-[8px] font-black border border-cyan-200/25 flex items-center justify-center gap-1 disabled:opacity-50"
-                  title="Backup spreadsheet"
-                >
-                  <IconBackup />
-                  <span>{isBackupRunning ? 'WAIT' : 'BACKUP'}</span>
-                </button>
-                <button
-                  onClick={() => setShowGridPanel((prev) => !prev)}
-                  className="w-5 h-5 rounded-md bg-white/10 text-white/90 text-[10px] font-black border border-white/20 flex items-center justify-center"
-                  title={showGridPanel ? 'Sembunyikan panel' : 'Munculkan panel'}
-                >
-                  {showGridPanel ? '-' : '+'}
-                </button>
-              </div>
+              <button
+                onClick={() => setShowGridPanel((prev) => !prev)}
+                className="w-5 h-5 rounded-md bg-white/10 text-white/90 text-[10px] font-black border border-white/20 flex items-center justify-center"
+                title={showGridPanel ? 'Sembunyikan panel' : 'Munculkan panel'}
+              >
+                {showGridPanel ? '-' : '+'}
+              </button>
             </div>
 
             {!showGridPanel && (
@@ -1973,84 +1781,6 @@ console.error('AI Height detection error:', err);
 
           <div className="flex items-center gap-1.5 flex-wrap justify-end">
 
-            <div className="relative">
-              <button
-                type="button"
-                onClick={() => setShowPlantTypePicker((prev) => !prev)}
-                className={`backdrop-blur-sm px-2 py-1 rounded-lg border flex items-center gap-1.5 transition-all active:scale-95 ${
-                  showPlantTypePicker
-                    ? 'bg-emerald-500/18 border-emerald-300/30 shadow-[0_8px_20px_rgba(16,185,129,0.18)]'
-                    : 'bg-black/15 border-white/5 hover:bg-white/10'
-                }`}
-                title="Pilih jenis tanaman"
-              >
-                <svg className="w-3.5 h-3.5 text-emerald-200" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 20c0-4.5 2.2-7.6 6.6-9.3 1.6-.6 2.4-2.4 1.9-4-2.7.1-5 .7-6.9 1.8A8.64 8.64 0 0 0 12 10.2 8.64 8.64 0 0 0 10.4 8.5c-1.9-1.1-4.2-1.7-6.9-1.8-.5 1.6.3 3.4 1.9 4C9.8 12.4 12 15.5 12 20Z" />
-                </svg>
-                <span
-                  className="text-[7px] font-black uppercase tracking-widest text-emerald-100"
-                  style={{ fontFamily: '"Plus Jakarta Sans", "Segoe UI", sans-serif' }}
-                >
-                  {formState.jenis || 'Tanaman'}
-                </span>
-              </button>
-
-              {showPlantTypePicker && (
-                <div className="absolute right-0 top-[calc(100%+8px)] z-50 w-[220px] rounded-2xl bg-black/85 backdrop-blur-xl border border-white/10 shadow-2xl p-2.5">
-                  <div className="px-1 pb-2 flex items-center justify-between gap-2">
-                    <div className="flex flex-col">
-                      <span
-                        className="text-[10px] font-extrabold text-white/70 uppercase tracking-[0.16em]"
-                        style={{ fontFamily: '"Plus Jakarta Sans", "Segoe UI", sans-serif' }}
-                      >
-                        Jenis Tanaman
-                      </span>
-                      <span
-                        className="text-[10px] font-bold text-emerald-200/90"
-                        style={{ fontFamily: '"Plus Jakarta Sans", "Segoe UI", sans-serif' }}
-                      >
-                        {formState.jenis ? `Aktif: ${formState.jenis}` : 'Pilih sebelum foto'}
-                      </span>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setShowPlantTypePicker(false)}
-                      className="w-6 h-6 rounded-full bg-white/10 text-white/80 text-xs flex items-center justify-center"
-                      title="Tutup pilihan tanaman"
-                    >
-                      ×
-                    </button>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-2">
-                    {availablePlantTypes.map((type) => {
-                      const isSelected = formState.jenis === type;
-
-                      return (
-                        <button
-                          key={type}
-                          type="button"
-                          aria-pressed={isSelected}
-                          onClick={() => {
-                            onFormStateChange((prev) => ({ ...prev, jenis: type }));
-                            setShowPlantTypePicker(false);
-                          }}
-                          className={`min-h-[46px] rounded-xl px-3 text-[13px] font-extrabold border transition-all duration-200 active:scale-[0.98] ${
-                            isSelected
-                              ? 'bg-white border-emerald-300 text-emerald-700 shadow-[0_8px_20px_rgba(16,185,129,0.18)]'
-                              : 'bg-white/8 border-white/15 text-white hover:bg-white/14'
-                          }`}
-                          style={{ fontFamily: '"Plus Jakarta Sans", "Segoe UI", sans-serif' }}
-                        >
-                          {type}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-            </div>
-
             {!gps && (
               <div className="bg-red-500/10 backdrop-blur-sm px-2 py-1 rounded-lg border border-red-500/15 flex items-center gap-2 animate-pulse">
                 <div className="w-1.5 h-1.5 rounded-full bg-red-500" />
@@ -2077,58 +1807,26 @@ console.error('AI Height detection error:', err);
               </div>
             )}
 
-<button
-              type="button"
-              onClick={() => onSyncModeChange((prev) => {
-                if (prev === 'fast') return 'lite';
-                if (prev === 'lite') return 'hyperlink';
-                return 'fast';
-              })}
-              className={`backdrop-blur-sm px-2 py-1 rounded-lg border flex items-center gap-1.5 active:scale-95 transition-all ${
-                syncMode === 'fast'
-                  ? 'bg-sky-500/10 border-sky-400/20'
-                  : syncMode === 'hyperlink'
-                    ? 'bg-indigo-500/10 border-indigo-400/20'
-                    : 'bg-slate-500/10 border-slate-300/20'
-              }`}
-              title={
-                syncMode === 'fast'
-                  ? 'Mode Fast aktif: kirim otomatis saat koneksi tersedia'
-                  : syncMode === 'hyperlink'
-                    ? 'Mode Link: kirim link Drive manual'
-                    : 'Mode Lite aktif: kirim manual dari menu sync'
-              }
-            >
-              <div className={`w-1.5 h-1.5 rounded-full ${syncMode === 'fast' ? 'bg-sky-300' : syncMode === 'hyperlink' ? 'bg-indigo-300' : 'bg-slate-300'}`} />
-              <span className={`text-[7px] font-black uppercase tracking-widest ${syncMode === 'fast' ? 'text-sky-100' : syncMode === 'hyperlink' ? 'text-indigo-100' : 'text-slate-200'}`}>
-                Sync {syncMode}
-              </span>
-            </button>
-
             {/* Height Display - prominent like GPS accuracy */}
             <div className={`backdrop-blur-sm px-2 py-1 rounded-lg border flex items-center gap-1.5 ${
               heightMode === 'ai' 
-                ? 'bg-emerald-500/10 border-emerald-500/15'
+                ? 'bg-cyan-500/10 border-cyan-500/15'
                 : heightMode === 'pixel-scale'
                   ? 'bg-orange-500/10 border-orange-500/15'
                   : 'bg-emerald-500/10 border-emerald-500/15'
             }`}>
               <div className={`w-1.5 h-1.5 rounded-full ${
-                heightMode === 'ai' ? 'bg-emerald-400' : heightMode === 'pixel-scale' ? 'bg-orange-400' : 'bg-emerald-400'
+                heightMode === 'ai' ? 'bg-cyan-400' : heightMode === 'pixel-scale' ? 'bg-orange-400' : 'bg-emerald-400'
               }`} />
               <span className={`text-[7px] font-black uppercase tracking-widest ${
-                heightMode === 'ai' ? 'text-emerald-200' : heightMode === 'pixel-scale' ? 'text-orange-200' : 'text-emerald-200'
+                heightMode === 'ai' ? 'text-cyan-200' : heightMode === 'pixel-scale' ? 'text-orange-200' : 'text-emerald-200'
               }`}>
                 ±{formState.tinggi}cm
               </span>
             </div>
 
             {livePlantHealth && (
-              <button
-                type="button"
-                onClick={() => onHealthBadgeClick(livePlantHealth)}
-                className="bg-black/15 backdrop-blur-sm px-2 py-1 rounded-lg border border-white/5 flex items-center gap-2 transition-all hover:bg-black/25 active:scale-[0.98]"
-              >
+              <div className="bg-black/15 backdrop-blur-sm px-2 py-1 rounded-lg border border-white/5 flex items-center gap-2">
                 <span
                   className={`text-[7px] font-black uppercase tracking-widest ${
                     livePlantHealth.health === 'Sehat'
@@ -2141,24 +1839,16 @@ console.error('AI Height detection error:', err);
                   AI: {livePlantHealth.health}
                 </span>
                 <span className="text-[7px] font-bold text-white/70">{livePlantHealth.confidence}%</span>
-              </button>
+              </div>
             )}
 
-{isHeightAiMode && activeHeightSuggestion && (
-              <div className={`backdrop-blur-sm px-2 py-1 rounded-lg border flex items-center gap-2 ${
-                activeHeightSuggestion.source === 'visual'
-                  ? 'bg-emerald-500/20 border-emerald-300/25'
-                  : 'bg-amber-500/20 border-amber-300/25'
-              }`}>
-                <span className={`text-[7px] font-black uppercase tracking-widest ${
-                  activeHeightSuggestion.source === 'visual' ? 'text-emerald-300' : 'text-amber-200'
-                }`}>
-                  {activeHeightSuggestion.source === 'visual' ? 'AI Visual' : 'Saran Otomatis'}
+{isHeightAiMode && heightAiEstimate && heightAiEstimate.cm > 0 && (
+              <div className="bg-emerald-500/20 backdrop-blur-sm px-2 py-1 rounded-lg border border-emerald-300/25 flex items-center gap-2">
+                <span className={`text-[7px] font-black uppercase tracking-widest ${heightAiEstimate.cm > 0 ? 'text-emerald-300' : 'text-red-300'}`}>
+                  AI Tinggi
                 </span>
-                <span className={`text-[7px] font-bold ${
-                  activeHeightSuggestion.source === 'visual' ? 'text-emerald-200' : 'text-amber-100'
-                }`}>
-                  : {activeHeightSuggestion.cm} cm
+                <span className={`text-[7px] font-bold ${heightAiEstimate.cm > 0 ? 'text-emerald-200' : 'text-red-200'}`}>
+                  : {heightAiEstimate.cm} cm
                 </span>
               </div>
             )}
@@ -2188,7 +1878,7 @@ console.error('AI Height detection error:', err);
               </button>
             )}
 
-            {isHeightAiMode && !activeHeightSuggestion && !detectionFailureReason && (
+            {isHeightAiMode && (!heightAiEstimate || heightAiEstimate.cm === 0) && !detectionFailureReason && (
               <div className="bg-amber-500/20 backdrop-blur-sm px-2 py-1 rounded-lg border border-amber-300/25 flex items-center gap-2">
                 <span className="text-[7px] font-black text-amber-200 uppercase tracking-widest">AI Tinggi</span>
                 <span className="text-[7px] font-bold text-amber-200">: Mengukur...</span>
@@ -2235,298 +1925,146 @@ console.error('AI Height detection error:', err);
                   </svg>
                 </button>
                 <div className={`w-1.5 h-1.5 rounded-full ${
-                  heightMode === 'ai' ? 'bg-emerald-400' :
+                  heightMode === 'ai' ? 'bg-cyan-400' :
                   heightMode === 'pixel-scale' ? 'bg-orange-400' :
                   'bg-emerald-400'
                 }`} />
                 <span className="text-[9px] font-black text-white uppercase tracking-wider">
-                  {heightMode === 'ai' ? 'AI Visual' : heightMode === 'pixel-scale' ? 'Pixel Scale' : 'Manual'}
+                  {heightMode === 'ai' ? 'Tinggi AI' : heightMode === 'pixel-scale' ? 'Ukur Tinggi' : 'Pengaturan Tinggi'}
                 </span>
               </div>
-              <div className="flex items-center gap-2">
-                <span className="text-[10px] sm:text-xs font-black text-white bg-emerald-500/65 px-2.5 sm:px-3 py-1 rounded-xl border border-emerald-300/20">
-                  {panelHeightDisplay} cm
-                </span>
-              </div>
+              <span className="text-[10px] sm:text-xs font-black text-white bg-emerald-500/65 px-2.5 sm:px-3 py-1 rounded-xl border border-emerald-300/20">
+                {formState.tinggi} cm
+              </span>
             </div>
             
             {!heightControlsCollapsed && (
               <>
-                <div className="relative px-1.5 py-1.5">
-                  <div className="grid grid-cols-3 gap-2">
+            <div className="relative px-1.5 py-1.5">
+              <input 
+                type="range" min={HEIGHT_MIN_CM} max={HEIGHT_MAX_CM} value={formState.tinggi} 
+                onChange={e => onFormStateChange(prev => ({ ...prev, tinggi: parseInt(e.target.value) }))}
+                className="w-full h-3.5 sm:h-4 bg-emerald-600/20 rounded-full appearance-none cursor-pointer outline-none
+                  [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-8 [&::-webkit-slider-thumb]:h-8 sm:[&::-webkit-slider-thumb]:w-10 sm:[&::-webkit-slider-thumb]:h-10 
+                  [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white 
+                  [&::-webkit-slider-thumb]:shadow-[0_0_16px_rgba(255,255,255,0.7),0_0_8px_rgba(0,0,0,0.18)] 
+                  [&::-webkit-slider-thumb]:border-4 [&::-webkit-slider-thumb]:border-emerald-500
+                  [&::-moz-range-thumb]:w-8 [&::-moz-range-thumb]:h-8 sm:[&::-moz-range-thumb]:w-10 sm:[&::-moz-range-thumb]:h-10 [&::-moz-range-thumb]:border-4 [&::-moz-range-thumb]:border-emerald-500
+                  [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:bg-white" 
+              />
+
+              <div className="mt-1.5 flex items-center justify-between gap-1.5">
+                <div className="flex items-center gap-1.5">
+                  {/* Toggle overlay visibility for pixel scale mode - addresses obstruction issue */}
+                  {isMeasureMode && (
                     <button
-                      type="button"
-                      onClick={() => setHeightMode('slider')}
-                      className={`px-2 py-2 rounded-xl border text-[8px] font-black uppercase tracking-wide transition-all ${
-                        isSliderHeightMode
-                          ? 'bg-emerald-500/30 border-emerald-300/40 text-emerald-100'
-                          : 'bg-black/20 border-white/10 text-white/70'
+                      onClick={() => setShowMeasureOverlay(!showMeasureOverlay)}
+                      className={`px-2 py-1 rounded-md border text-[7px] font-black uppercase tracking-wide active:scale-95 transition-all ${
+                        showMeasureOverlay 
+                          ? 'bg-orange-500/40 border-orange-400/40 text-orange-200' 
+                          : 'bg-black/20 border-white/15 text-white/80'
                       }`}
+                      title={showMeasureOverlay ? 'Sembunyikan garis pengukuran' : 'Tampilkan garis pengukuran'}
                     >
-                      Manual
+                      {showMeasureOverlay ? 'Garis: ON' : 'Garis: OFF'}
                     </button>
+                    )}
+                    
+                    {/* Quick stick height adjustment - shown when in measure mode */}
+                    {isMeasureMode && (
                     <button
-                      type="button"
                       onClick={() => {
-                        setHeightMode('ai');
-                        triggerHeightAiNotice();
+                        const newHeight = stickHeightMeters >= 3 ? 1 : stickHeightMeters + 0.5;
+                        setStickHeightMeters(newHeight);
+                        localStorage.setItem('pixel-scale-stick-height', newHeight.toString());
+                        if (navigator.vibrate) navigator.vibrate(30);
                       }}
-                      className={`px-2 py-2 rounded-xl border text-[8px] font-black uppercase tracking-wide transition-all ${
-                        isHeightAiMode
-                          ? 'bg-emerald-500/35 border-emerald-300/40 text-emerald-100'
-                          : 'bg-black/20 border-white/10 text-white/70'
-                      }`}
+                      className="px-2 py-1 rounded-md border text-[7px] font-black uppercase tracking-wide active:scale-95 transition-all bg-black/20 border-white/15 text-white/80"
+                      title={`Tinggi tongkat: ${stickHeightMeters}m - klik untuk ubah`}
                     >
-                      AI Tinggi
+                      📏{stickHeightMeters}m
                     </button>
+                    )}
+                    
+                    {/* Quick line offset adjustment - shown when in measure mode */}
+                    {isMeasureMode && (
                     <button
-                      type="button"
-                      onClick={handleToggleMeasureMode}
-                      className={`px-2 py-2 rounded-xl border text-[8px] font-black uppercase tracking-wide transition-all ${
-                        isMeasureMode
-                          ? 'bg-orange-500/35 border-orange-300/40 text-orange-100'
-                          : 'bg-black/20 border-white/10 text-white/70'
-                      }`}
+                      onClick={() => {
+                        const newOffset = lineOffsetPercent >= 30 ? 10 : lineOffsetPercent + 5;
+                        setLineOffsetPercent(newOffset);
+                        localStorage.setItem('pixel-scale-line-offset', newOffset.toString());
+                        if (navigator.vibrate) navigator.vibrate(30);
+                      }}
+                      className="px-2 py-1 rounded-md border text-[7px] font-black uppercase tracking-wide active:scale-95 transition-all bg-black/20 border-white/15 text-white/80"
+                      title={`Garis: ${lineOffsetPercent}% - klik untuk ubah`}
                     >
-                      Pixel
+                      ‖{lineOffsetPercent}%
                     </button>
+                    )}
+                    
+                    {/* Line position adjustment - move lines up/down */}
+                    {isMeasureMode && (
+                    <button
+                      onClick={() => {
+                        const newPos = linePositionPercent >= 80 ? 20 : linePositionPercent + 10;
+                        setLinePositionPercent(newPos);
+                        localStorage.setItem('pixel-scale-line-position', newPos.toString());
+                        if (navigator.vibrate) navigator.vibrate(30);
+                      }}
+                      className="px-2 py-1 rounded-md border text-[7px] font-black uppercase tracking-wide active:scale-95 transition-all bg-black/20 border-white/15 text-white/80"
+                      title={`Posisi garis: ${linePositionPercent}%`}
+                    >
+                      ↕{linePositionPercent}%
+                    </button>
+                    )}
                   </div>
 
-                  {isSliderHeightMode && (
-                    <>
-                      <input 
-                        type="range" min={HEIGHT_MIN_CM} max={HEIGHT_MAX_CM} value={formState.tinggi} 
-                        onChange={e => onFormStateChange(prev => ({ ...prev, tinggi: parseInt(e.target.value) }))}
-                        className="mt-3 w-full h-3.5 sm:h-4 bg-emerald-600/20 rounded-full appearance-none cursor-pointer outline-none
-                          [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-8 [&::-webkit-slider-thumb]:h-8 sm:[&::-webkit-slider-thumb]:w-10 sm:[&::-webkit-slider-thumb]:h-10 
-                          [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white 
-                          [&::-webkit-slider-thumb]:shadow-[0_0_16px_rgba(255,255,255,0.7),0_0_8px_rgba(0,0,0,0.18)] 
-                          [&::-webkit-slider-thumb]:border-4 [&::-webkit-slider-thumb]:border-emerald-500
-                          [&::-moz-range-thumb]:w-8 [&::-moz-range-thumb]:h-8 sm:[&::-moz-range-thumb]:w-10 sm:[&::-moz-range-thumb]:h-10 [&::-moz-range-thumb]:border-4 [&::-moz-range-thumb]:border-emerald-500
-                          [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:bg-white" 
-                      />
-                      <p className="mt-2 text-[8px] font-bold text-white/75 leading-relaxed">
-                        Geser slider hanya saat memakai mode manual.
-                      </p>
-                    </>
-                  )}
+                {/* Show status text based on mode */}
+                {isHeightAiMode && (
+                  <span className="text-[7px] font-black text-cyan-100 uppercase tracking-wide">
+                    {heightAiEstimate ? `Estimasi ${heightAiEstimate.cm}cm (${heightAiEstimate.confidence}%)` : 'Mengukur...'}
+                  </span>
+                )}
+                {isMeasureMode && false && measureGuideText && (
+                  <span className="text-[7px] font-black text-orange-100 uppercase tracking-wide">
+                    {measureGuideText}
+                  </span>
+                )}
+              </div>
 
-                  {isHeightAiMode && (
-                    <div className="mt-3 space-y-2">
-                      <div className="grid grid-cols-2 gap-2">
-                        <button
-                          type="button"
-                          onClick={() => setHeightAiBehavior('suggestion')}
-                          className={`px-2 py-2 rounded-xl border text-[8px] font-black uppercase tracking-wide transition-all ${
-                            heightAiBehavior === 'suggestion'
-                              ? 'bg-white/95 border-white text-emerald-700'
-                              : 'bg-black/20 border-white/10 text-white/70'
-                          }`}
-                        >
-                          Saran
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setHeightAiBehavior('automatic')}
-                          className={`px-2 py-2 rounded-xl border text-[8px] font-black uppercase tracking-wide transition-all ${
-                            heightAiBehavior === 'automatic'
-                              ? 'bg-emerald-500/35 border-emerald-300/40 text-emerald-100'
-                              : 'bg-black/20 border-white/10 text-white/70'
-                          }`}
-                        >
-                          Otomatis
-                        </button>
-                      </div>
+              {!isHeightAiMode && (
+                <p className="mt-1.5 text-[7px] font-bold text-white/65 uppercase tracking-wide">
+                  Tekan AI Tinggi ON untuk estimasi otomatis.
+                </p>
+              )}
 
-                      {activeHeightSuggestion ? (
-                        <div className={`rounded-2xl border px-3 py-3 ${
-                          activeHeightSuggestion.source === 'visual'
-                            ? 'bg-emerald-500/15 border-emerald-300/20'
-                            : 'bg-amber-500/15 border-amber-300/20'
-                        }`}>
-                          <div className="flex items-center justify-between gap-2">
-                            <div>
-                              <p className={`text-[8px] font-black uppercase tracking-[0.18em] ${
-                                activeHeightSuggestion.source === 'visual' ? 'text-emerald-200' : 'text-amber-200'
-                              }`}>
-                                {activeHeightSuggestion.source === 'visual'
-                                  ? heightAiBehavior === 'automatic'
-                                    ? 'AI Visual Aktif'
-                                    : 'Saran AI Visual'
-                                  : 'Saran Otomatis'}
-                              </p>
-                              <p className="mt-1 text-sm font-black text-white">{activeHeightSuggestion.cm} cm</p>
-                              <p className="mt-1 text-[8px] font-bold text-white/70 leading-relaxed">
-                                {activeHeightSuggestion.source === 'visual'
-                                  ? `Deteksi kamera ${activeHeightSuggestion.confidence}% confidence.`
-                                  : 'Diambil dari rata-rata sampel tinggi Anda dan dibatasi rentang kalibrasi.'}
-                              </p>
-                            </div>
-                            {heightAiBehavior === 'suggestion' && (
-                              <button
-                                type="button"
-                                onClick={() => applySuggestedHeight(activeHeightSuggestion.cm, activeHeightSuggestion.source)}
-                                className="px-3 py-2 rounded-xl bg-white text-slate-900 text-[8px] font-black uppercase tracking-wide"
-                              >
-                                Pakai
-                              </button>
-                            )}
-                          </div>
-
-                          {heightAiBehavior === 'automatic' && activeHeightSuggestion.source === 'history' && (
-                            <div className="mt-2 flex items-center justify-between gap-2">
-                              <p className="text-[8px] font-bold text-white/75 leading-relaxed">
-                                AI visual gagal, jadi sistem hanya memberi saran dan tidak mengubah kolom tinggi otomatis.
-                              </p>
-                              <button
-                                type="button"
-                                onClick={() => applySuggestedHeight(activeHeightSuggestion.cm, 'history')}
-                                className="px-3 py-2 rounded-xl bg-amber-300 text-amber-950 text-[8px] font-black uppercase tracking-wide"
-                              >
-                                Pakai
-                              </button>
-                            </div>
-                          )}
-
-                          {activeHeightSuggestion.source === 'history' && (
-                            <button
-                              type="button"
-                              onClick={() => setHeightMode('pixel-scale')}
-                              className="mt-2 px-3 py-2 rounded-xl border border-white/15 bg-black/20 text-white text-[8px] font-black uppercase tracking-wide"
-                            >
-                              Pindah ke Pixel Scale
-                            </button>
-                          )}
-                        </div>
-                      ) : (
-                        <div className="rounded-2xl border border-white/10 bg-black/20 px-3 py-3">
-                          <p className="text-[8px] font-black text-white/80 uppercase tracking-[0.18em]">AI Visual</p>
-                          <p className="mt-1 text-[8px] font-bold text-white/70 leading-relaxed">
-                            Sistem sedang mencoba membaca tinggi dari kamera. Jika gagal, saran otomatis akan muncul dari riwayat sampel Anda.
-                          </p>
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {isMeasureMode && (
-                    <div className="mt-3 space-y-2">
-                      <div className="flex items-center gap-2">
-                        <span className="px-2 py-1 rounded-md border border-orange-400/40 bg-orange-500/40 text-[7px] font-black uppercase tracking-wide text-orange-100">
-                          Skala: Aktif
-                        </span>
-
-                        {measuredHeightCm !== null && (
-                          <span className="text-[7px] font-black text-orange-100 uppercase tracking-wide">
-                            Hasil {Math.round(measuredHeightCm)} cm
-                          </span>
-                        )}
-                      </div>
-
-                      <div className="rounded-2xl border border-orange-300/20 bg-black/20 px-3 py-3 space-y-3">
-                        <div>
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="text-[8px] font-black text-orange-100 uppercase tracking-[0.18em]">
-                              Skala Garis
-                            </span>
-                            <span className="text-[8px] font-black text-white">{stickHeightMeters.toFixed(1)} m</span>
-                          </div>
-                          <input
-                            type="range"
-                            min={1}
-                            max={3}
-                            step={0.5}
-                            value={stickHeightMeters}
-                            onChange={(e) => {
-                              const nextValue = Number(e.target.value);
-                              setStickHeightMeters(nextValue);
-                              localStorage.setItem('pixel-scale-stick-height', nextValue.toString());
-                            }}
-                            className="mt-2 w-full h-2 bg-orange-500/20 rounded-full appearance-none cursor-pointer outline-none
-                              [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4
-                              [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-orange-300
-                              [&::-moz-range-thumb]:w-4 [&::-moz-range-thumb]:h-4 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:bg-orange-300 [&::-moz-range-thumb]:border-0"
-                          />
-                          <div className="mt-1 flex items-center justify-between text-[8px] font-bold text-white/55">
-                            <span>1 m</span>
-                            <span>3 m</span>
-                          </div>
-                        </div>
-
-                        <div>
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="text-[8px] font-black text-orange-100 uppercase tracking-[0.18em]">
-                              Lebar Atas Bawah
-                            </span>
-                            <span className="text-[8px] font-black text-white">{lineOffsetPercent}%</span>
-                          </div>
-                          <input
-                            type="range"
-                            min={10}
-                            max={30}
-                            step={5}
-                            value={lineOffsetPercent}
-                            onChange={(e) => {
-                              const nextValue = Number(e.target.value);
-                              setLineOffsetPercent(nextValue);
-                              localStorage.setItem('pixel-scale-line-offset', nextValue.toString());
-                            }}
-                            className="mt-2 w-full h-2 bg-orange-500/20 rounded-full appearance-none cursor-pointer outline-none
-                              [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4
-                              [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-orange-300
-                              [&::-moz-range-thumb]:w-4 [&::-moz-range-thumb]:h-4 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:bg-orange-300 [&::-moz-range-thumb]:border-0"
-                          />
-                          <div className="mt-1 flex items-center justify-between text-[8px] font-bold text-white/55">
-                            <span>10%</span>
-                            <span>30%</span>
-                          </div>
-                        </div>
-
-                        <div>
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="text-[8px] font-black text-orange-100 uppercase tracking-[0.18em]">
-                              Proporsi Garis
-                            </span>
-                            <span className="text-[8px] font-black text-white">{linePositionPercent}%</span>
-                          </div>
-                          <input
-                            type="range"
-                            min={10}
-                            max={100}
-                            step={5}
-                            value={linePositionPercent}
-                            onChange={(e) => {
-                              const nextValue = Number(e.target.value);
-                              setLinePositionPercent(nextValue);
-                              localStorage.setItem('pixel-scale-line-position', nextValue.toString());
-                            }}
-                            className="mt-2 w-full h-2 bg-orange-500/20 rounded-full appearance-none cursor-pointer outline-none
-                              [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4
-                              [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-orange-300
-                              [&::-moz-range-thumb]:w-4 [&::-moz-range-thumb]:h-4 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:bg-orange-300 [&::-moz-range-thumb]:border-0"
-                          />
-                          <div className="mt-1 flex items-center justify-between text-[8px] font-bold text-white/55">
-                            <span>10%</span>
-                            <span>100%</span>
-                          </div>
-                        </div>
-                      </div>
-
-                      <p className="text-[8px] font-bold text-white/75 leading-relaxed">
-                        Gunakan Pixel Scale saat ingin ukur dari pangkal ke pucuk dengan referensi visual.
-                      </p>
-                    </div>
-                  )}
-
-                  {heightAiRange && (
-                    <p className="mt-2 text-[7px] font-bold text-cyan-100/90 uppercase tracking-wide">
-                      Rentang kalibrasi AI: {heightAiRange.min}-{heightAiRange.max} cm.
-                    </p>
-                  )}
-                </div>
-              </>
+              {heightAiRange && (
+                <p className="mt-1.5 text-[7px] font-bold text-cyan-100/90 uppercase tracking-wide">
+                  Batas AI aktif: {heightAiRange.min}-{heightAiRange.max} cm.
+                </p>
+              )}
+            </div>
+            </>
             )}
 
+          </div>
+
+          <div className="px-2 -mt-1">
+            <div className="flex gap-1.5 overflow-x-auto no-scrollbar py-1.5 px-2 rounded-2xl bg-black/10 backdrop-blur-sm border border-white/5 shadow-md">
+              {PLANT_TYPES.map(type => (
+                <button
+                  key={type}
+                  onClick={() => onFormStateChange(prev => ({ ...prev, jenis: type }))}
+                  className={`flex-shrink-0 px-2.5 sm:px-3 py-1.5 rounded-xl text-[8px] sm:text-[9px] font-black tracking-widest border transition-all duration-300 ${
+                    formState.jenis === type
+                      ? 'bg-white/85 border-white/80 text-slate-900 shadow-sm'
+                      : 'bg-black/10 border-white/20 text-white/85 hover:bg-white/10'
+                  }`}
+                >
+                  {type.toUpperCase()}
+                </button>
+              ))}
+            </div>
           </div>
 
           <div className="flex justify-between items-center px-2 pt-1">
@@ -2540,8 +2078,8 @@ console.error('AI Height detection error:', err);
             <div className="flex items-center justify-center">
       {/* TOMBOL CAPTURE PUTIH BOLD (SOLID) */}
               <button 
-                onClick={() => {
-                  handleCaptureClick();
+                onClick={e => {
+                  handleCaptureClick(e);
                 }}
                 disabled={cameraLoading || !!cameraError || needsUserAction}
                 className="group relative w-24 h-24 sm:w-28 sm:h-28 flex items-center justify-center active:scale-95 transition-all disabled:opacity-20"
@@ -2610,7 +2148,7 @@ console.error('AI Height detection error:', err);
             </div>
 
             <p className="mt-3 text-[8px] font-bold text-white/65">
-              Catatan: mode Otomatis hanya mengisi tinggi langsung jika AI visual berhasil. Jika gagal, sistem turun menjadi saran otomatis dari riwayat sampel.
+              Catatan: tinggi AI akan auto-update ke kolom tinggi di aplikasi, lalu ikut tersimpan saat foto di-capture.
             </p>
 
             <button

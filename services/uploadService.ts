@@ -5,10 +5,7 @@ export interface UploadResult {
   ok: boolean;
   confirmed: boolean;
   message: string;
-  warning?: string;
 }
-
-const MAX_APPS_SCRIPT_BODY_BYTES = 5_000_000;
 
 const sleep = (ms: number): Promise<void> =>
   new Promise((resolve) => {
@@ -22,64 +19,14 @@ const isLikelyAppsScriptUrl = (url: string): boolean => {
 
 const normalizeUrl = (url: string): string => url.trim();
 
-const normalizeBase64 = (value: string): string => {
-  const trimmed = value.trim().replace(/\s+/g, '').replace(/-/g, '+').replace(/_/g, '/');
-  if (!trimmed) {
-    return '';
-  }
-
-  const remainder = trimmed.length % 4;
-  if (remainder === 0) {
-    return trimmed;
-  }
-
-  return `${trimmed}${'='.repeat(4 - remainder)}`;
-};
-
-const extractRawBase64 = (value: string): string => {
-  if (!value) {
-    return '';
-  }
-
-  const clean = value.trim();
-  const commaIndex = clean.indexOf(',');
-  const raw = commaIndex >= 0 ? clean.slice(commaIndex + 1) : clean;
-  return normalizeBase64(raw);
-};
-
-const isValidBase64Payload = (value: string): boolean => {
-  if (!value) {
-    return false;
-  }
-
-  if (!/^[A-Za-z0-9+/]+=*$/.test(value)) {
-    return false;
-  }
-
-  try {
-    atob(value);
-    return true;
-  } catch {
-    return false;
-  }
-};
-
-const getUtf8ByteLength = (value: string): number => {
-  try {
-    return new TextEncoder().encode(value).length;
-  } catch {
-    return value.length;
-  }
-};
-
 const isEntryPersistedInCloud = async (url: string, entryId: string): Promise<boolean> => {
   const cleanUrl = normalizeUrl(url);
   const separator = cleanUrl.includes('?') ? '&' : '?';
-  const listUrl = `${cleanUrl}${separator}action=list&limit=100&offset=0&order=desc`;
+  const listUrl = `${cleanUrl}${separator}action=list&limit=30&offset=0&order=desc`;
 
-  for (let attempt = 0; attempt < 5; attempt++) {
+  for (let attempt = 0; attempt < 3; attempt++) {
     if (attempt > 0) {
-      await sleep(1000 * attempt);
+      await sleep(700 * attempt);
     }
 
     try {
@@ -94,11 +41,7 @@ const isEntryPersistedInCloud = async (url: string, entryId: string): Promise<bo
       }
 
       const result = await response.json();
-      const rows = Array.isArray(result?.data)
-        ? result.data
-        : Array.isArray(result)
-          ? result
-          : [];
+      const rows = Array.isArray(result?.data) ? result.data : [];
       const found = rows.some((row: any) => String(row?.ID || '').trim() === entryId);
       if (found) {
         return true;
@@ -109,23 +52,6 @@ const isEntryPersistedInCloud = async (url: string, entryId: string): Promise<bo
   }
 
   return false;
-};
-
-const verifyPersistedAfterCorsResponse = async (url: string, entryId: string): Promise<UploadResult> => {
-  const verified = await isEntryPersistedInCloud(url, entryId);
-  if (verified) {
-    return {
-      ok: true,
-      confirmed: true,
-      message: 'Data tersimpan dan terverifikasi lewat pengecekan list terbaru.',
-    };
-  }
-
-  return {
-    ok: true,
-    confirmed: false,
-    message: 'Respons server diterima, tetapi ID belum ditemukan di spreadsheet. Data tetap di antrian retry.',
-  };
 };
 
 export const uploadToAppsScript = async (url: string, entry: PlantEntry): Promise<UploadResult> => {
@@ -167,23 +93,16 @@ export const uploadToAppsScript = async (url: string, entry: PlantEntry): Promis
   // Teks path yang akan digunakan sebagai nama file di Drive dan referensi di Sheet
   const pathName = `Montana V2_Images/Gambar Montana (${entry.id}).jpg`;
   
-  const rawBase64 = extractRawBase64(entry.foto || '');
-
-  if (entry.foto && !rawBase64) {
-    return {
-      ok: false,
-      confirmed: false,
-      message: 'Format foto tidak valid. Data URL gambar kosong atau rusak.',
-    };
-  }
-
-  if (rawBase64 && !isValidBase64Payload(rawBase64)) {
-    return {
-      ok: false,
-      confirmed: false,
-      message: 'Format Base64 foto tidak valid sebelum dikirim ke Apps Script.',
-    };
-  }
+  const rawBase64 = (() => {
+    if (!entry.foto) {
+      return '';
+    }
+    if (!entry.foto.includes(',')) {
+      return entry.foto;
+    }
+    const parts = entry.foto.split(',');
+    return parts.length > 1 ? parts[1] : '';
+  })();
 
   /**
    * Payload diperkecil agar upload foto real tidak mudah melewati batas ukuran Apps Script.
@@ -218,24 +137,11 @@ export const uploadToAppsScript = async (url: string, entry: PlantEntry): Promis
     "AI_Confidence": Number.isFinite(entry.aiConfidence as number) ? Number(entry.aiConfidence).toFixed(2) : '',
     "AI_Deskripsi": entry.aiDeskripsi || '',
     "HCV_Input": Number.isFinite(entry.hcvInput as number) ? Number(entry.hcvInput).toFixed(2) : '',
-    "HCV_Deskripsi": entry.hcvDescription || '',
     "GPS_Quality": entry.gpsQualityAtCapture || 'Tidak Tersedia',
     "GPS_Accuracy_M": Number.isFinite(entry.gpsAccuracyAtCapture) ? Number(entry.gpsAccuracyAtCapture).toFixed(1) : '',
-    // Hindari mengirim Base64 dua kali karena membuat request membengkak.
-    "Base64": '',
+    "Base64": rawBase64,
     "RawBase64": rawBase64
   };
-
-  const requestBody = JSON.stringify(payload);
-  const requestBodyBytes = getUtf8ByteLength(requestBody);
-  if (requestBodyBytes > MAX_APPS_SCRIPT_BODY_BYTES) {
-    const sizeMb = (requestBodyBytes / (1024 * 1024)).toFixed(2);
-    return {
-      ok: false,
-      confirmed: false,
-      message: `Ukuran payload ${sizeMb} MB terlalu besar untuk Apps Script. Foto perlu diperkecil sebelum dikirim ke Drive.`,
-    };
-  }
 
   // 1) Coba kirim dengan CORS agar status sukses/error bisa diverifikasi dari JSON Apps Script.
   try {
@@ -245,18 +151,14 @@ export const uploadToAppsScript = async (url: string, entry: PlantEntry): Promis
       headers: {
         'Content-Type': 'text/plain;charset=utf-8',
       },
-      body: requestBody,
+      body: JSON.stringify(payload),
     });
 
     if (!corsResponse.ok) {
-      const responsePreview = await corsResponse.text().catch(() => '');
-      const compactPreview = responsePreview.replace(/\s+/g, ' ').trim().slice(0, 180);
       return {
         ok: false,
         confirmed: true,
-        message: compactPreview
-          ? `HTTP ${corsResponse.status} saat sinkronisasi. Respons: ${compactPreview}`
-          : `HTTP ${corsResponse.status} saat sinkronisasi.`,
+        message: `HTTP ${corsResponse.status} saat sinkronisasi.`,
       };
     }
 
@@ -264,7 +166,11 @@ export const uploadToAppsScript = async (url: string, entry: PlantEntry): Promis
     try {
       result = await corsResponse.json();
     } catch {
-      return verifyPersistedAfterCorsResponse(cleanUrl, entry.id);
+      return {
+        ok: true,
+        confirmed: true,
+        message: 'Upload berhasil, tetapi respons JSON tidak terbaca.',
+      };
     }
 
     if (result && result.status === 'error') {
@@ -275,20 +181,10 @@ export const uploadToAppsScript = async (url: string, entry: PlantEntry): Promis
       };
     }
 
-    if (!result || (result.status && result.status !== 'success')) {
-      return verifyPersistedAfterCorsResponse(cleanUrl, entry.id);
-    }
-
-    const driveWarningMessage = String(result?.driveMessage || '').trim();
-    const driveWarning = rawBase64 && String(result?.url || '').trim() === ''
-      ? (driveWarningMessage || 'Data cloud tersimpan, tetapi foto belum berhasil dibuat di Google Drive.')
-      : undefined;
-
     return {
       ok: true,
       confirmed: true,
       message: result?.message || 'Upload berhasil.',
-      warning: driveWarning,
     };
   } catch {
     // 2) Fallback no-cors untuk deployment Apps Script yang tidak membuka CORS.
@@ -300,7 +196,7 @@ export const uploadToAppsScript = async (url: string, entry: PlantEntry): Promis
         headers: {
           'Content-Type': 'text/plain;charset=utf-8',
         },
-        body: requestBody,
+        body: JSON.stringify(payload),
       });
 
       const verified = await isEntryPersistedInCloud(cleanUrl, entry.id);
