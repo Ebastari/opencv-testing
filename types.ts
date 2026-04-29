@@ -7,7 +7,7 @@ export interface GpsLocation {
 
 export type ViewMode = 'camera' | 'gis';
 
-export type SyncMode = 'fast' | 'lite';
+export type SyncMode = 'fast' | 'lite' | 'hyperlink';
 export type PlantHealthLabel = 'Sehat' | 'Merana' | 'Mati';
 export type BottomSheetTabId = 'form' | 'grafik' | 'data' | 'hcv' | 'help' | 'dashboard' | 'pengaturan';
 

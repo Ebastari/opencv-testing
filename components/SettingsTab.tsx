@@ -186,7 +186,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
         <div className="space-y-3 bg-slate-50 p-5 rounded-3xl border border-slate-100">
           <div className="space-y-2">
             <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest px-1">Mode Pengiriman Data</label>
-            <div className="grid grid-cols-2 gap-2">
+<div className="grid grid-cols-3 gap-2">
               <button
                 type="button"
                 onClick={() => onSyncModeChange('fast')}
@@ -200,6 +200,13 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                 className={`px-3 py-3 rounded-2xl border text-[10px] font-black uppercase tracking-wide transition-all ${syncMode === 'lite' ? 'bg-slate-700/15 border-slate-300 text-slate-900' : 'bg-white border-slate-200 text-slate-700'}`}
               >
                 Lite
+              </button>
+              <button
+                type="button"
+                onClick={() => onSyncModeChange('hyperlink')}
+                className={`px-3 py-3 rounded-2xl border text-[10px] font-black uppercase tracking-wide transition-all ${syncMode === 'hyperlink' ? 'bg-indigo-500/20 border-indigo-300/35 text-indigo-900' : 'bg-white border-slate-200 text-slate-700'}`}
+              >
+                Link
               </button>
             </div>
             <p className="text-[9px] text-slate-500 leading-relaxed">

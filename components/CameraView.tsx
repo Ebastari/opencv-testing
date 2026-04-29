@@ -2077,22 +2077,30 @@ console.error('AI Height detection error:', err);
               </div>
             )}
 
-            <button
+<button
               type="button"
-              onClick={() => onSyncModeChange((prev) => (prev === 'fast' ? 'lite' : 'fast'))}
+              onClick={() => onSyncModeChange((prev) => {
+                if (prev === 'fast') return 'lite';
+                if (prev === 'lite') return 'hyperlink';
+                return 'fast';
+              })}
               className={`backdrop-blur-sm px-2 py-1 rounded-lg border flex items-center gap-1.5 active:scale-95 transition-all ${
                 syncMode === 'fast'
                   ? 'bg-sky-500/10 border-sky-400/20'
-                  : 'bg-slate-500/10 border-slate-300/20'
+                  : syncMode === 'hyperlink'
+                    ? 'bg-indigo-500/10 border-indigo-400/20'
+                    : 'bg-slate-500/10 border-slate-300/20'
               }`}
               title={
                 syncMode === 'fast'
                   ? 'Mode Fast aktif: kirim otomatis saat koneksi tersedia'
-                  : 'Mode Lite aktif: kirim manual dari menu sync'
+                  : syncMode === 'hyperlink'
+                    ? 'Mode Link: kirim link Drive manual'
+                    : 'Mode Lite aktif: kirim manual dari menu sync'
               }
             >
-              <div className={`w-1.5 h-1.5 rounded-full ${syncMode === 'fast' ? 'bg-sky-300' : 'bg-slate-300'}`} />
-              <span className={`text-[7px] font-black uppercase tracking-widest ${syncMode === 'fast' ? 'text-sky-100' : 'text-slate-200'}`}>
+              <div className={`w-1.5 h-1.5 rounded-full ${syncMode === 'fast' ? 'bg-sky-300' : syncMode === 'hyperlink' ? 'bg-indigo-300' : 'bg-slate-300'}`} />
+              <span className={`text-[7px] font-black uppercase tracking-widest ${syncMode === 'fast' ? 'text-sky-100' : syncMode === 'hyperlink' ? 'text-indigo-100' : 'text-slate-200'}`}>
                 Sync {syncMode}
               </span>
             </button>

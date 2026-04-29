@@ -80,7 +80,7 @@ const STORAGE_CRITICAL_RATIO = 0.9;
 const LEGACY_APPS_SCRIPT_URLS = [
   'https://script.google.com/macros/s/AKfycbym0oMDXPNNWn9lKcM7_uC97Dgsu9a8CgnxW849AOeg8wyio7BYU9FBy0gJEveovUaO8g/exec',
   'https://script.google.com/macros/s/AKfycbyZ7Jx8rPkjEcJk7wM_OnIacacu_1MmXisTmLdoyR0UmEqULszsCmgccVaGd3JvSkgsLw/exec',
-  'https://script.google.com/macros/s/AKfycbwwxuFkJCGh0FLY3-RpCbrCzltrXH5eVUIuK0qScj5f9DnkgdZwRFfC0mz1xBQMhBTmfQ/exec',
+'https://script.google.com/macros/s/AKfycby4XdqAv_3Q980ZFNSSU9-MWDC9lTfDgQhVJiNkBPagGQZNCI6gwsEB2AwXk9Kauf5qbg/exec',
   'https://script.google.com/macros/s/AKfycbyOLIVrNrxyFIJHklKTUFEX-ckqPaORCo9ga6n7d_FGct5v01o5ZqD44bWj138zcTq49Q/exec',
   'https://script.google.com/macros/s/AKfycbzLvcetpQNfIl0NF_L5sfUxUq7vgcVDfCcfHfqif7SJZtSwYZ3jfwjbBX89EcjV5rg8kw/exec',
   'https://script.google.com/macros/s/AKfycbxcxJ2nTJpVqECVPkDhNo5ulpsL0G2KSdiwoOqpJeIBASVq_K3mFGpviIXDhPzcdre3sw/exec',
@@ -292,7 +292,7 @@ const App: React.FC = () => {
   });
   const [plantTypes, setPlantTypes] = useLocalStorage<string[]>('plantTypes', [...DEFAULT_PLANT_TYPES]);
   const [gridAnchor, setGridAnchor] = useLocalStorage<GridAnchor | null>('gridAnchor', null);
-  const [syncMode, setSyncMode] = useLocalStorage<SyncMode>('syncMode', 'fast');
+  const [syncMode, setSyncMode] = useLocalStorage<SyncMode>('syncMode', 'fast'); // 'fast' | 'lite' | 'hyperlink'
   const [autoBackupIntervalMinutes, setAutoBackupIntervalMinutes] = useLocalStorage<AutoBackupIntervalMinutes>('autoBackupIntervalMinutes', 0);
   const [lastSpreadsheetBackupAt, setLastSpreadsheetBackupAt] = useLocalStorage<string | null>('lastSpreadsheetBackupAt', null);
   const [lastSpreadsheetBackupReminderAt, setLastSpreadsheetBackupReminderAt] = useLocalStorage<string | null>('lastSpreadsheetBackupReminderAt', null);
@@ -746,14 +746,7 @@ const App: React.FC = () => {
         return false;
       }
 
-      if (forceSync) {
-        return true;
-      }
-
-      if (!entry.lastSyncAttemptAt) {
-        return true;
-      }
-
+      const nowMs = Date.now();
       const retryCount = entry.retryCount || 0;
       const lastAttemptMs = new Date(entry.lastSyncAttemptAt).getTime();
       if (!Number.isFinite(lastAttemptMs)) {
@@ -1171,7 +1164,7 @@ const App: React.FC = () => {
           showToast(message || 'Gagal Sinkron, Tersimpan Lokal.', 'error');
         }
 
-        void syncPendingEntries({ background: true, force: true });
+        void syncPendingEntries({ background: true });
       } else {
         showToast('Tersimpan dengan Geotag.', 'success');
       }
@@ -1199,70 +1192,88 @@ const App: React.FC = () => {
 
   return (
     <div className="w-screen h-[100dvh] min-h-[100dvh] overflow-hidden bg-black text-slate-800">
-      {viewMode === 'camera' ? (
-        <CameraView 
-          onCapture={handleCapture}
-          formState={formState}
-          onFormStateChange={setFormState}
-          plantTypes={availablePlantTypes}
-          entriesCount={totalEntriesCount}
-          pendingCount={pendingEntriesCount}
-          isSyncing={isSyncing}
-          lastSyncAt={lastSyncAt}
-          gps={gps}
-          onGpsUpdate={setGps}
-          onShowSheet={() => setBottomSheetOpen(true)}
-          onHealthBadgeClick={(result) => handleShowHcvInsight(result, 'camera-ai')}
-          showToast={showToast}
-          isOnline={isOnline}
-          syncMode={syncMode}
-          onSyncModeChange={setSyncMode}
-          gridAnchor={gridAnchor}
-          distanceFromAnchorM={distanceFromAnchorM}
-          effectiveCoordinate={liveCoordinate}
-          onSetGridAnchor={handleSetGridAnchor}
-          onClearGridAnchor={handleClearGridAnchor}
-          onBackupNow={() => { void runSpreadsheetBackup('camera'); }}
-          isBackupRunning={isSpreadsheetBackupRunning}
-          onToggleViewMode={toggleViewMode}
-        />
-      ) : (
-        <MapView 
-          entries={gisEntries}
-          onBack={() => setViewMode('camera')}
-          pendingCount={pendingEntriesCount}
-          totalEntriesCount={totalEntriesCount}
-        />
+      {/* Hyperlink mode: tampilkan link khusus jika syncMode === 'hyperlink' */}
+      {syncMode === 'hyperlink' && (
+        <div className="flex flex-col items-center justify-center h-full p-8">
+          <a
+            href="https://cameraoffline.montana-tech.info/"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-blue-600 underline text-lg font-semibold mb-4"
+          >
+            Buka Camera Offline Montana
+          </a>
+          <p className="text-slate-700 text-center">Mode Offline Aktif</p>
+        </div>
       )}
-      <BottomSheet
-        isOpen={isBottomSheetOpen}
-        onClose={() => setBottomSheetOpen(false)}
-        entries={entries}
-        totalEntriesCount={totalEntriesCount}
-        pendingEntriesCount={pendingEntriesCount}
-        formState={formState}
-        onFormStateChange={setFormState}
-        plantTypes={availablePlantTypes}
-        onRegisterPlantType={registerPlantType}
-        onClearData={handleClearData}
-        appsScriptUrl={appsScriptUrl}
-        onAppsScriptUrlChange={setAppsScriptUrl}
-        syncMode={syncMode}
-        onSyncModeChange={setSyncMode}
-        storageStatus={storageStatus}
-        tabRequest={bottomSheetTabRequest}
-        hcvInsightSelection={hcvInsightSelection}
-        onSelectHealthInsight={(result) => handleShowHcvInsight(result, 'analytics-ai')}
-        showToast={showToast}
-        gps={gps}
-        onGpsUpdate={setGps}
-        onSyncPending={syncPendingEntries}
-        isOnline={isOnline}
-        onBackupNow={() => { void runSpreadsheetBackup('analytics'); }}
-        isBackupRunning={isSpreadsheetBackupRunning}
-        autoBackupIntervalMinutes={autoBackupIntervalMinutes}
-        onAutoBackupIntervalChange={setAutoBackupIntervalMinutes}
-      />
+      {syncMode !== 'hyperlink' && (
+        <>
+          {viewMode === 'camera' ? (
+            <CameraView 
+              onCapture={handleCapture}
+              formState={formState}
+              onFormStateChange={setFormState}
+              plantTypes={availablePlantTypes}
+              entriesCount={totalEntriesCount}
+              pendingCount={pendingEntriesCount}
+              isSyncing={isSyncing}
+              lastSyncAt={lastSyncAt}
+              gps={gps}
+              onGpsUpdate={setGps}
+              onShowSheet={() => setBottomSheetOpen(true)}
+              onHealthBadgeClick={(result) => handleShowHcvInsight(result, 'camera-ai')}
+              showToast={showToast}
+              isOnline={isOnline}
+              syncMode={syncMode}
+              onSyncModeChange={setSyncMode}
+              gridAnchor={gridAnchor}
+              distanceFromAnchorM={distanceFromAnchorM}
+              effectiveCoordinate={liveCoordinate}
+              onSetGridAnchor={handleSetGridAnchor}
+              onClearGridAnchor={handleClearGridAnchor}
+              onBackupNow={() => { void runSpreadsheetBackup('camera'); }}
+              isBackupRunning={isSpreadsheetBackupRunning}
+              onToggleViewMode={toggleViewMode}
+            />
+          ) : (
+            <MapView 
+              entries={gisEntries}
+              onBack={() => setViewMode('camera')}
+              pendingCount={pendingEntriesCount}
+              totalEntriesCount={totalEntriesCount}
+            />
+          )}
+          <BottomSheet
+            isOpen={isBottomSheetOpen}
+            onClose={() => setBottomSheetOpen(false)}
+            entries={entries}
+            totalEntriesCount={totalEntriesCount}
+            pendingEntriesCount={pendingEntriesCount}
+            formState={formState}
+            onFormStateChange={setFormState}
+            plantTypes={availablePlantTypes}
+            onRegisterPlantType={registerPlantType}
+            onClearData={handleClearData}
+            appsScriptUrl={appsScriptUrl}
+            onAppsScriptUrlChange={setAppsScriptUrl}
+            syncMode={syncMode}
+            onSyncModeChange={setSyncMode}
+            storageStatus={storageStatus}
+            tabRequest={bottomSheetTabRequest}
+            hcvInsightSelection={hcvInsightSelection}
+            onSelectHealthInsight={(result) => handleShowHcvInsight(result, 'analytics-ai')}
+            showToast={showToast}
+            gps={gps}
+            onGpsUpdate={setGps}
+            onSyncPending={syncPendingEntries}
+            isOnline={isOnline}
+            onBackupNow={() => { void runSpreadsheetBackup('analytics'); }}
+            isBackupRunning={isSpreadsheetBackupRunning}
+            autoBackupIntervalMinutes={autoBackupIntervalMinutes}
+            onAutoBackupIntervalChange={setAutoBackupIntervalMinutes}
+          />
+        </>
+      )}
       {toast && <Toast message={toast.message} type={toast.type} />}
     </div>
   );

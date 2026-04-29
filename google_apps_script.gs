@@ -496,6 +496,19 @@ function appendMonitoringRow_(sheet, payload) {
   if (!noPohon && statusDuplikat === 'UNIK') {
     noPohon = String(getNextTreeNumber_(sheet));
   }
+  // Blokir penambahan baris baru jika status duplikat
+  if (statusDuplikat === 'DUPLIKAT' && existingRowNumber <= 1) {
+    return {
+      id: id,
+      noPohon: noPohon,
+      statusDuplikat: statusDuplikat,
+      error: true,
+      message: 'Data duplikat: kombinasi tanggal, koordinat, dan no pohon sudah ada.',
+      rowNumber: null,
+      persisted: false,
+      updated: false,
+    };
+  }
 
   const row = new Array(headers.length).fill('');
   setByHeader_(row, headerIndex, 'ID', id);
